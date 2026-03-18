@@ -94,6 +94,9 @@ type portfolioConfig struct {
 	TrendStrategyWeight    float64
 	BreakoutStrategyWeight float64
 	PullbackStrategyWeight float64
+	MinPrice               float64
+	MinBacktestExcess      float64
+	MaxBacktestDrawdown    float64
 }
 
 type regimeConfig struct {
@@ -589,7 +592,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if cooldownUntil[item.meta.Symbol] != "" && date <= cooldownUntil[item.meta.Symbol] {
 				continue
 			}
-			if candidate.Score > 0 && candidate.Bucket != "回避" && passPortfolioCandidateFilters(history, candidate, portfolio.MinAverageTurnover, portfolio.MaxVolatility, portfolio.OverheatThreshold, portfolio.MinTrendGap) {
+			if candidate.Score > 0 && candidate.Bucket != "回避" && passPortfolioCandidateFilters(history, candidate, portfolio.MinAverageTurnover, portfolio.MaxVolatility, portfolio.OverheatThreshold, portfolio.MinTrendGap, portfolio.MinPrice, portfolio.MinBacktestExcess, portfolio.MaxBacktestDrawdown) {
 				candidates = append(candidates, candidate)
 			}
 		}
@@ -1227,8 +1230,11 @@ func buildUniverseBenchmarkCurve(series []marketSeries, dates []string, initialC
 	return curve
 }
 
-func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate, minAverageTurnover float64, maxVolatility float64, overheatThreshold float64, minTrendGap float64) bool {
+func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate, minAverageTurnover float64, maxVolatility float64, overheatThreshold float64, minTrendGap float64, minPrice float64, minBacktestExcess float64, maxBacktestDrawdown float64) bool {
 	if len(history) < 5 {
+		return false
+	}
+	if candidate.ClosePrice < minPrice {
 		return false
 	}
 
@@ -1255,6 +1261,14 @@ func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate,
 	}
 	if candidate.TrendScore < minTrendGap {
 		return false
+	}
+	if candidate.HasBacktest {
+		if candidate.BacktestExcess < minBacktestExcess {
+			return false
+		}
+		if candidate.BacktestDrawdown > maxBacktestDrawdown {
+			return false
+		}
 	}
 	return true
 }
@@ -2687,6 +2701,24 @@ func loadConfig(path string) (config, error) {
 					return config{}, fmt.Errorf("invalid portfolio.pullback_strategy_weight: %w", convErr)
 				}
 				cfg.Portfolio.PullbackStrategyWeight = v
+			case "min_price":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.min_price: %w", convErr)
+				}
+				cfg.Portfolio.MinPrice = v
+			case "min_backtest_excess":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.min_backtest_excess: %w", convErr)
+				}
+				cfg.Portfolio.MinBacktestExcess = v
+			case "max_backtest_drawdown":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.max_backtest_drawdown: %w", convErr)
+				}
+				cfg.Portfolio.MaxBacktestDrawdown = v
 			}
 		case "regime":
 			switch key {
@@ -2830,6 +2862,12 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Portfolio.PullbackStrategyWeight == 0 {
 		cfg.Portfolio.PullbackStrategyWeight = 1.0
+	}
+	if cfg.Portfolio.MinPrice <= 0 {
+		cfg.Portfolio.MinPrice = 3.0
+	}
+	if cfg.Portfolio.MaxBacktestDrawdown <= 0 {
+		cfg.Portfolio.MaxBacktestDrawdown = 0.25
 	}
 	if cfg.Regime.CautiousExposure <= 0 {
 		cfg.Regime.CautiousExposure = 0.45

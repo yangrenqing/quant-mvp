@@ -14,7 +14,7 @@ strategy:
   api_key_env: ALPHAVANTAGE_API_KEY
   data_path: data/market_data.csv
   short_window: 5
-  long_window: 14
+  long_window: 9
 
 risk:
   max_position: 1
@@ -47,6 +47,9 @@ portfolio:
   trend_strategy_weight: 1.0
   breakout_strategy_weight: 1.0
   pullback_strategy_weight: 1.0
+  min_price: 3.0
+  min_backtest_excess: -0.30
+  max_backtest_drawdown: 0.25
 
 regime:
   cautious_exposure: 0.45
