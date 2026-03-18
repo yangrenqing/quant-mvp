@@ -97,6 +97,7 @@ type portfolioConfig struct {
 	MinPrice               float64
 	MinBacktestExcess      float64
 	MaxBacktestDrawdown    float64
+	LimitMoveThreshold     float64
 }
 
 type regimeConfig struct {
@@ -104,6 +105,8 @@ type regimeConfig struct {
 	RiskOffExposure  float64
 	RiskOffDrawdown  float64
 	CautiousDrawdown float64
+	BreadthRiskOff   float64
+	BreadthCautious  float64
 }
 
 type marketBar struct {
@@ -599,7 +602,8 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		applyRotationOverlay(candidates)
 
 		relativeStrengthFloor := candidateMedianScore(candidates)
-		regimeLabel, targetExposure := benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), strategy.LongWindow, regime)
+		breadth := marketBreadth(candidates)
+		regimeLabel, targetExposure := benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), breadth, strategy.LongWindow, regime)
 		lastRegimeLabel = regimeLabel
 		lastExposureLevel = targetExposure
 		if targetExposure > 0 {
@@ -651,6 +655,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				holdingPeaks[symbol] = bar.Close
 			}
 			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
+				if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+					continue
+				}
 				execPrice := bar.Close * (1 - slippageRate)
 				fee := float64(shares) * execPrice * feeRate
 				cash += float64(shares)*execPrice - fee
@@ -662,6 +669,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
+				if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+					continue
+				}
 				execPrice := bar.Close * (1 - slippageRate)
 				fee := float64(shares) * execPrice * feeRate
 				cash += float64(shares)*execPrice - fee
@@ -673,6 +683,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			if candidate, keep := targetSet[symbol]; keep && candidate.Action == "SELL" {
+				if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+					continue
+				}
 				execPrice := bar.Close * (1 - slippageRate)
 				fee := float64(shares) * execPrice * feeRate
 				cash += float64(shares)*execPrice - fee
@@ -684,6 +697,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			if _, keep := targetSet[symbol]; keep {
+				continue
+			}
+			if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
 				continue
 			}
 			execPrice := bar.Close * (1 - slippageRate)
@@ -747,6 +763,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 
 				if diff < 0 {
 					sellShares := -diff
+					if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+						continue
+					}
 					execPrice := bar.Close * (1 - slippageRate)
 					fee := float64(sellShares) * execPrice * feeRate
 					cash += float64(sellShares)*execPrice - fee
@@ -760,6 +779,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				}
 
 				execPrice := bar.Close * (1 + slippageRate)
+				if isBuyRestricted(bar, portfolio.LimitMoveThreshold) {
+					continue
+				}
 				cost := float64(diff) * execPrice
 				fee := cost * feeRate
 				if cost+fee > cash {
@@ -1294,6 +1316,21 @@ func standardDeviation(values []float64) float64 {
 	return math.Sqrt(sum / float64(len(values)))
 }
 
+func dailyMove(bar marketBar) float64 {
+	if bar.Open <= 0 {
+		return 0
+	}
+	return bar.Close/bar.Open - 1
+}
+
+func isBuyRestricted(bar marketBar, threshold float64) bool {
+	return dailyMove(bar) >= threshold
+}
+
+func isSellRestricted(bar marketBar, threshold float64) bool {
+	return dailyMove(bar) <= -threshold
+}
+
 func candidateMedianScore(candidates []scanCandidate) float64 {
 	if len(candidates) == 0 {
 		return 0
@@ -1307,7 +1344,20 @@ func candidateMedianScore(candidates []scanCandidate) float64 {
 	return scores[len(scores)/2]
 }
 
-func benchmarkMarketRegime(history []marketBar, longWindow int, regime regimeConfig) (string, float64) {
+func marketBreadth(candidates []scanCandidate) float64 {
+	if len(candidates) == 0 {
+		return 0
+	}
+	positive := 0
+	for _, candidate := range candidates {
+		if candidate.Score > 0 && candidate.Action != "SELL" {
+			positive++
+		}
+	}
+	return float64(positive) / float64(len(candidates))
+}
+
+func benchmarkMarketRegime(history []marketBar, breadth float64, longWindow int, regime regimeConfig) (string, float64) {
 	if len(history) < longWindow {
 		return "cautious", regime.CautiousExposure
 	}
@@ -1331,10 +1381,10 @@ func benchmarkMarketRegime(history []marketBar, longWindow int, regime regimeCon
 		drawdown = (peak - latest.Close) / peak
 	}
 
-	if latest.Close < longMA || drawdown > regime.RiskOffDrawdown {
+	if latest.Close < longMA || drawdown > regime.RiskOffDrawdown || breadth <= regime.BreadthRiskOff {
 		return "risk_off", regime.RiskOffExposure
 	}
-	if latest.Close < shortMA || drawdown > regime.CautiousDrawdown {
+	if latest.Close < shortMA || drawdown > regime.CautiousDrawdown || breadth <= regime.BreadthCautious {
 		return "cautious", regime.CautiousExposure
 	}
 	return "risk_on", 1.0
@@ -2719,6 +2769,12 @@ func loadConfig(path string) (config, error) {
 					return config{}, fmt.Errorf("invalid portfolio.max_backtest_drawdown: %w", convErr)
 				}
 				cfg.Portfolio.MaxBacktestDrawdown = v
+			case "limit_move_threshold":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.limit_move_threshold: %w", convErr)
+				}
+				cfg.Portfolio.LimitMoveThreshold = v
 			}
 		case "regime":
 			switch key {
@@ -2746,6 +2802,18 @@ func loadConfig(path string) (config, error) {
 					return config{}, fmt.Errorf("invalid regime.cautious_drawdown: %w", convErr)
 				}
 				cfg.Regime.CautiousDrawdown = v
+			case "breadth_risk_off":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid regime.breadth_risk_off: %w", convErr)
+				}
+				cfg.Regime.BreadthRiskOff = v
+			case "breadth_cautious":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid regime.breadth_cautious: %w", convErr)
+				}
+				cfg.Regime.BreadthCautious = v
 			}
 		}
 	}
@@ -2869,6 +2937,9 @@ func loadConfig(path string) (config, error) {
 	if cfg.Portfolio.MaxBacktestDrawdown <= 0 {
 		cfg.Portfolio.MaxBacktestDrawdown = 0.25
 	}
+	if cfg.Portfolio.LimitMoveThreshold <= 0 {
+		cfg.Portfolio.LimitMoveThreshold = 0.095
+	}
 	if cfg.Regime.CautiousExposure <= 0 {
 		cfg.Regime.CautiousExposure = 0.45
 	}
@@ -2880,6 +2951,12 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Regime.CautiousDrawdown <= 0 {
 		cfg.Regime.CautiousDrawdown = 0.06
+	}
+	if cfg.Regime.BreadthRiskOff <= 0 {
+		cfg.Regime.BreadthRiskOff = 0.25
+	}
+	if cfg.Regime.BreadthCautious <= 0 {
+		cfg.Regime.BreadthCautious = 0.45
 	}
 
 	return cfg, nil

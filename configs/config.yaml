@@ -50,9 +50,12 @@ portfolio:
   min_price: 3.0
   min_backtest_excess: -0.30
   max_backtest_drawdown: 0.25
+  limit_move_threshold: 0.095
 
 regime:
   cautious_exposure: 0.45
   risk_off_exposure: 0.00
   risk_off_drawdown: 0.12
   cautious_drawdown: 0.06
+  breadth_risk_off: 0.25
+  breadth_cautious: 0.45
