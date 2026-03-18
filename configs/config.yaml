@@ -10,7 +10,7 @@ schedule:
 strategy:
   name: sma-crossover
   symbol: IBM
-  data_source: alphavantage
+  data_source: auto
   api_key_env: ALPHAVANTAGE_API_KEY
   data_path: data/market_data.csv
   short_window: 3

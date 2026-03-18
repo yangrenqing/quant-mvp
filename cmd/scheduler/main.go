@@ -2,19 +2,26 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"html"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const configPath = "configs/config.yaml"
+const reportsDir = "reports"
+const aShareUniversePath = "data/a_share_universe.csv"
 
 type config struct {
 	AppName  string
@@ -60,6 +67,9 @@ type marketBar struct {
 type strategySignal struct {
 	Symbol       string
 	Action       string
+	Mode         string
+	Plan         string
+	MarketDate   string
 	ShortMA      float64
 	LongMA       float64
 	ClosePrice   float64
@@ -68,6 +78,7 @@ type strategySignal struct {
 	LowPrice     float64
 	Volume       float64
 	Reason       string
+	DataSource   string
 	PositionSize int
 }
 
@@ -77,16 +88,52 @@ type positionState struct {
 	EntryPrice float64
 }
 
+type scanCandidate struct {
+	Symbol       string
+	Name         string
+	Industry     string
+	Action       string
+	Bucket       string
+	Score        float64
+	AvgVolume    float64
+	Trigger      string
+	TriggerPrice float64
+	AvoidTags    []string
+	ShortMA      float64
+	LongMA       float64
+	ClosePrice   float64
+	MarketDate   string
+	Reason       string
+	Plan         string
+}
+
 func main() {
 	logger := log.New(os.Stdout, "", log.LstdFlags)
+	symbolOverride := flag.String("symbol", "", "Override the configured symbol for this run")
+	once := flag.Bool("once", false, "Run the strategy once and exit")
+	scanAShare := flag.Bool("scan-a-share", false, "Scan the full A-share universe and generate a ranked report")
+	topN := flag.Int("top", 10, "Number of candidates to keep in the A-share scan report")
+	flag.Parse()
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		logger.Fatalf("load config: %v", err)
 	}
+	if strings.TrimSpace(*symbolOverride) != "" {
+		cfg.Strategy.Symbol = strings.TrimSpace(*symbolOverride)
+	}
 
 	if err := ensureSQLiteDB(cfg.DB.Path); err != nil {
 		logger.Fatalf("ensure sqlite db: %v", err)
+	}
+	if err := os.MkdirAll(reportsDir, 0o755); err != nil {
+		logger.Fatalf("ensure reports dir: %v", err)
+	}
+	if *scanAShare {
+		if err := runAShareScan(cfg.Strategy, *topN); err != nil {
+			logger.Fatalf("a-share scan failed: %v", err)
+		}
+		return
 	}
 
 	logger.Printf("scheduler started for %s", cfg.AppName)
@@ -96,7 +143,7 @@ func main() {
 		logger.Printf("initial run finished")
 	}
 
-	if len(os.Args) > 1 && os.Args[1] == "--once" {
+	if *once {
 		return
 	}
 
@@ -116,6 +163,67 @@ func main() {
 			logger.Printf("scheduled run finished")
 		}
 	}
+}
+
+func runAShareScan(strategy strategyConfig, topN int) error {
+	if topN <= 0 {
+		topN = 10
+	}
+
+	symbols, err := loadAShareUniverse()
+	if err != nil {
+		return err
+	}
+
+	candidates := make([]scanCandidate, 0, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := loadBarsFromTushare(symbol.Symbol, os.Getenv("TUSHARE_TOKEN"))
+		dataSource := "tushare"
+		sourceErr := ""
+		if err != nil {
+			sourceErr = err.Error()
+			bars, err = loadBarsFromBaoStock(symbol.Symbol)
+			dataSource = "baostock"
+		}
+		if err != nil || len(bars) < strategy.LongWindow {
+			continue
+		}
+
+		candidate, err := rankCandidate(symbol.Symbol, symbol.Name, symbol.Industry, bars, dataSource, sourceErr, strategy)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	if len(candidates) == 0 {
+		return errors.New("no A-share candidates were generated")
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if bucketPriority(left.Bucket) != bucketPriority(right.Bucket) {
+			return bucketPriority(left.Bucket) < bucketPriority(right.Bucket)
+		}
+		return left.Score > right.Score
+	})
+
+	if topN > len(candidates) {
+		topN = len(candidates)
+	}
+	selected := candidates[:topN]
+
+	if err := writeAShareScanReports(selected); err != nil {
+		return err
+	}
+
+	fmt.Printf("A-share scan complete. Top %d candidates written to %s and %s\n", topN, filepath.Join(reportsDir, "a_share_scan.txt"), filepath.Join(reportsDir, "a_share_scan.html"))
+	for i, candidate := range selected {
+		fmt.Printf("%d. [%s] %s %s %s score=%.4f close=%.2f\n", i+1, candidate.Bucket, candidate.Symbol, candidate.Name, candidate.Action, candidate.Score, candidate.ClosePrice)
+	}
+	fmt.Println()
+
+	return nil
 }
 
 func loadConfig(path string) (config, error) {
@@ -227,7 +335,7 @@ func loadConfig(path string) (config, error) {
 		cfg.Strategy.DataPath = "data/market_data.csv"
 	}
 	if cfg.Strategy.DataSource == "" {
-		cfg.Strategy.DataSource = "alphavantage"
+		cfg.Strategy.DataSource = "auto"
 	}
 	if cfg.Strategy.APIKeyEnv == "" {
 		cfg.Strategy.APIKeyEnv = "ALPHAVANTAGE_API_KEY"
@@ -314,30 +422,41 @@ func runStrategy(path string, strategy strategyConfig, risk riskConfig) error {
 	}
 
 	if signal.Action == "SKIP" {
+		if err := writePlanReports(signal, now); err != nil {
+			return err
+		}
+		printTradingPlan(signal, now)
 		sql := fmt.Sprintf(
 			"INSERT INTO execution_records (strategy_name, status, note, executed_at) VALUES (%s, %s, %s, %s);",
 			quoteSQL(strategy.Name),
 			quoteSQL("skipped"),
-			quoteSQL(signal.Reason),
+			quoteSQL(fmt.Sprintf("%s source=%s", signal.Reason, signal.DataSource)),
 			quoteSQL(now.Format(time.RFC3339)),
 		)
 		return execSQLite(path, sql)
 	}
 
+	if err := writePlanReports(signal, now); err != nil {
+		return err
+	}
+	printTradingPlan(signal, now)
 	sql := buildPersistSQL(strategy.Name, signal, now)
 	return execSQLite(path, sql)
 }
 
 func buildPersistSQL(strategyName string, signal strategySignal, now time.Time) string {
 	note := fmt.Sprintf(
-		"signal=%s symbol=%s reason=%s short_ma=%.2f long_ma=%.2f close=%.2f position=%d",
+		"signal=%s mode=%s symbol=%s source=%s reason=%s short_ma=%.2f long_ma=%.2f close=%.2f position=%d plan=%s",
 		signal.Action,
+		signal.Mode,
 		signal.Symbol,
+		signal.DataSource,
 		signal.Reason,
 		signal.ShortMA,
 		signal.LongMA,
 		signal.ClosePrice,
 		signal.PositionSize,
+		signal.Plan,
 	)
 
 	positionSide := "FLAT"
@@ -388,7 +507,7 @@ ON CONFLICT(symbol) DO UPDATE SET
 }
 
 func evaluateSignal(dbPath string, strategy strategyConfig, risk riskConfig) (strategySignal, error) {
-	bars, err := loadBars(strategy)
+	bars, dataSource, sourceErr, err := loadBars(strategy)
 	if err != nil {
 		return strategySignal{}, err
 	}
@@ -404,6 +523,7 @@ func evaluateSignal(dbPath string, strategy strategyConfig, risk riskConfig) (st
 	latest := bars[len(bars)-1]
 	shortMA := average(closes[len(closes)-strategy.ShortWindow:])
 	longMA := average(closes[len(closes)-strategy.LongWindow:])
+	mode := modeFromDataSource(dataSource)
 
 	state, err := loadPositionState(dbPath, strategy.Symbol)
 	if err != nil {
@@ -436,6 +556,9 @@ func evaluateSignal(dbPath string, strategy strategyConfig, risk riskConfig) (st
 		return strategySignal{
 			Symbol:       strategy.Symbol,
 			Action:       "SKIP",
+			Mode:         mode,
+			Plan:         planForAction(action, state.Quantity > 0, mode),
+			MarketDate:   latest.Date,
 			ShortMA:      shortMA,
 			LongMA:       longMA,
 			ClosePrice:   latest.Close,
@@ -444,13 +567,19 @@ func evaluateSignal(dbPath string, strategy strategyConfig, risk riskConfig) (st
 			LowPrice:     latest.Low,
 			Volume:       latest.Volume,
 			Reason:       fmt.Sprintf("repeat signal filtered: %s", action),
+			DataSource:   withSourceSuffix(dataSource, sourceErr),
 			PositionSize: state.Quantity,
 		}, nil
 	}
 
+	reason = buildReasonWithSource(reason, withSourceSuffix(dataSource, sourceErr))
+
 	return strategySignal{
 		Symbol:       strategy.Symbol,
 		Action:       action,
+		Mode:         mode,
+		Plan:         planForAction(action, state.Quantity > 0, mode),
+		MarketDate:   latest.Date,
 		ShortMA:      shortMA,
 		LongMA:       longMA,
 		ClosePrice:   latest.Close,
@@ -459,22 +588,273 @@ func evaluateSignal(dbPath string, strategy strategyConfig, risk riskConfig) (st
 		LowPrice:     latest.Low,
 		Volume:       latest.Volume,
 		Reason:       reason,
+		DataSource:   dataSource,
 		PositionSize: positionSize,
 	}, nil
 }
 
-func loadBars(strategy strategyConfig) ([]marketBar, error) {
-	if strings.EqualFold(strategy.DataSource, "alphavantage") {
+func loadBars(strategy strategyConfig) ([]marketBar, string, string, error) {
+	switch strings.ToLower(strategy.DataSource) {
+	case "auto":
+		if isAShareSymbol(strategy.Symbol) {
+			bars, err := loadBarsFromBaoStock(strategy.Symbol)
+			if err == nil {
+				return bars, "baostock", "", nil
+			}
+			bars, backupErr := loadBarsFromTushare(strategy.Symbol, os.Getenv("TUSHARE_TOKEN"))
+			if backupErr == nil {
+				return bars, "tushare", err.Error(), nil
+			}
+			if strategy.DataPath == "" {
+				return nil, "", "", err
+			}
+
+			bars, csvErr := loadBarsFromCSV(strategy.DataPath)
+			if csvErr != nil {
+				return nil, "", "", fmt.Errorf("baostock failed: %v; tushare failed: %v; csv fallback failed: %w", err, backupErr, csvErr)
+			}
+			return bars, "csv", err.Error(), nil
+		}
+
 		bars, err := loadBarsFromAlphaVantage(strategy.Symbol, os.Getenv(strategy.APIKeyEnv))
 		if err == nil {
-			return bars, nil
+			return bars, "alphavantage", "", nil
 		}
 		if strategy.DataPath == "" {
-			return nil, err
+			return nil, "", "", err
 		}
+
+		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
+		if csvErr != nil {
+			return nil, "", "", fmt.Errorf("alphavantage failed: %v; csv fallback failed: %w", err, csvErr)
+		}
+		return bars, "csv", err.Error(), nil
+	case "tushare":
+		bars, err := loadBarsFromTushare(strategy.Symbol, os.Getenv("TUSHARE_TOKEN"))
+		if err == nil {
+			return bars, "tushare", "", nil
+		}
+		if strategy.DataPath == "" {
+			return nil, "", "", err
+		}
+
+		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
+		if csvErr != nil {
+			return nil, "", "", fmt.Errorf("tushare failed: %v; csv fallback failed: %w", err, csvErr)
+		}
+		return bars, "csv", err.Error(), nil
+	case "baostock":
+		bars, err := loadBarsFromBaoStock(strategy.Symbol)
+		if err == nil {
+			return bars, "baostock", "", nil
+		}
+		if strategy.DataPath == "" {
+			return nil, "", "", err
+		}
+
+		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
+		if csvErr != nil {
+			return nil, "", "", fmt.Errorf("baostock failed: %v; csv fallback failed: %w", err, csvErr)
+		}
+		return bars, "csv", err.Error(), nil
+	case "alphavantage":
+		bars, err := loadBarsFromAlphaVantage(strategy.Symbol, os.Getenv(strategy.APIKeyEnv))
+		if err == nil {
+			return bars, "alphavantage", "", nil
+		}
+		if strategy.DataPath == "" {
+			return nil, "", "", err
+		}
+
+		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
+		if csvErr != nil {
+			return nil, "", "", fmt.Errorf("alphavantage failed: %v; csv fallback failed: %w", err, csvErr)
+		}
+		return bars, "csv", err.Error(), nil
+	case "csv":
+		bars, err := loadBarsFromCSV(strategy.DataPath)
+		return bars, "csv", "", err
 	}
 
-	return loadBarsFromCSV(strategy.DataPath)
+	return nil, "", "", fmt.Errorf("unsupported data source %q", strategy.DataSource)
+}
+
+func withSourceSuffix(dataSource string, sourceErr string) string {
+	if sourceErr == "" {
+		return fmt.Sprintf("source=%s", dataSource)
+	}
+	return fmt.Sprintf("source=%s fallback_reason=%s", dataSource, sourceErr)
+}
+
+func buildReasonWithSource(reason string, sourceDetail string) string {
+	if sourceDetail == "" {
+		return reason
+	}
+	return fmt.Sprintf("%s; %s", reason, sourceDetail)
+}
+
+func modeFromDataSource(dataSource string) string {
+	if dataSource == "alphavantage" || dataSource == "eastmoney" || dataSource == "tushare" || dataSource == "baostock" {
+		return "live"
+	}
+	return "test"
+}
+
+func planForAction(action string, hasPosition bool, mode string) string {
+	prefix := "Tomorrow plan"
+	if mode == "test" {
+		prefix = "Test-mode tomorrow plan"
+	}
+
+	switch action {
+	case "BUY":
+		if hasPosition {
+			return prefix + ": hold existing long, do not add beyond max position"
+		}
+		return prefix + ": open a starter long position and cap size at configured max position"
+	case "SELL":
+		if hasPosition {
+			return prefix + ": reduce or close the long position, do not add new longs"
+		}
+		return prefix + ": stay flat and avoid opening a new long"
+	case "HOLD":
+		if hasPosition {
+			return prefix + ": keep the current position and wait for the next close"
+		}
+		return prefix + ": stay flat and wait for confirmation"
+	case "SKIP":
+		if hasPosition {
+			return prefix + ": keep the current position, repeated signal was filtered"
+		}
+		return prefix + ": no change, repeated signal was filtered"
+	default:
+		return prefix + ": no action"
+	}
+}
+
+func printTradingPlan(signal strategySignal, now time.Time) {
+	fmt.Printf(
+		"Mode: %s\nMarket date: %s\nSignal: %s\nReason: %s\nPlan for %s: %s\n\n",
+		signal.Mode,
+		signal.MarketDate,
+		signal.Action,
+		signal.Reason,
+		now.AddDate(0, 0, 1).Format("2006-01-02"),
+		signal.Plan,
+	)
+}
+
+func writePlanReports(signal strategySignal, now time.Time) error {
+	reportDate := now.AddDate(0, 0, 1).Format("2006-01-02")
+	textPath := filepath.Join(reportsDir, "latest_plan.txt")
+	htmlPath := filepath.Join(reportsDir, "latest_plan.html")
+
+	textContent := fmt.Sprintf(
+		"Mode: %s\nMarket date: %s\nSignal: %s\nReason: %s\nPlan for %s: %s\n",
+		signal.Mode,
+		signal.MarketDate,
+		signal.Action,
+		signal.Reason,
+		reportDate,
+		signal.Plan,
+	)
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trading Plan</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --card: #fffaf2;
+      --ink: #1c1a17;
+      --muted: #6f6658;
+      --accent: #0f766e;
+      --warn: #b45309;
+      --border: #d9cfbf;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: linear-gradient(135deg, #f4efe6, #e7dcc8);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 48px auto;
+      padding: 0 20px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 18px 50px rgba(60, 40, 10, 0.08);
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 40px;
+      line-height: 1;
+    }
+    .signal {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .meta, .reason {
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    .plan {
+      margin-top: 20px;
+      padding: 18px;
+      border-radius: 16px;
+      background: #f7f1e7;
+      border-left: 6px solid var(--warn);
+      font-size: 20px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <p class="eyebrow">%s mode</p>
+      <h1><span class="signal">%s</span></h1>
+      <p class="meta">Market date: %s</p>
+      <p class="meta">Plan for %s</p>
+      <p class="reason">%s</p>
+      <div class="plan">%s</div>
+    </div>
+  </div>
+</body>
+</html>
+`,
+		html.EscapeString(strings.ToUpper(signal.Mode)),
+		html.EscapeString(signal.Action),
+		html.EscapeString(signal.MarketDate),
+		html.EscapeString(reportDate),
+		html.EscapeString(signal.Reason),
+		html.EscapeString(signal.Plan),
+	)
+
+	if err := os.WriteFile(textPath, []byte(textContent), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	return nil
 }
 
 func loadBarsFromAlphaVantage(symbol string, apiKey string) ([]marketBar, error) {
@@ -507,6 +887,216 @@ func loadBarsFromAlphaVantage(symbol string, apiKey string) ([]marketBar, error)
 	return extractBars(rows)
 }
 
+func loadBarsFromTushare(symbol string, token string) ([]marketBar, error) {
+	if token == "" {
+		return nil, errors.New("missing TUSHARE_TOKEN")
+	}
+
+	tsCode, err := tushareTSCode(symbol)
+	if err != nil {
+		return nil, err
+	}
+
+	requestBody, err := json.Marshal(tushareRequest{
+		APIName: "daily",
+		Token:   token,
+		Params: map[string]any{
+			"ts_code":    tsCode,
+			"start_date": "20250101",
+			"end_date":   "20300101",
+		},
+		Fields: "ts_code,trade_date,open,high,low,close,vol",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://api.tushare.pro", strings.NewReader(string(requestBody)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tushare returned status %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var response tushareResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.Code != 0 {
+		return nil, fmt.Errorf("tushare error %d: %s", response.Code, response.Msg)
+	}
+	if response.Data == nil || len(response.Data.Items) == 0 {
+		return nil, errors.New("tushare returned no daily data")
+	}
+
+	bars := make([]marketBar, 0, len(response.Data.Items))
+	for i := len(response.Data.Items) - 1; i >= 0; i-- {
+		item := response.Data.Items[i]
+		if len(item) < 7 {
+			return nil, errors.New("unexpected tushare item format")
+		}
+		tradeDate, _ := item[1].(string)
+		openPrice, err := toFloat(item[2])
+		if err != nil {
+			return nil, err
+		}
+		highPrice, err := toFloat(item[3])
+		if err != nil {
+			return nil, err
+		}
+		lowPrice, err := toFloat(item[4])
+		if err != nil {
+			return nil, err
+		}
+		closePrice, err := toFloat(item[5])
+		if err != nil {
+			return nil, err
+		}
+		volume, err := toFloat(item[6])
+		if err != nil {
+			return nil, err
+		}
+
+		bars = append(bars, marketBar{
+			Date:   formatTradeDate(tradeDate),
+			Open:   openPrice,
+			High:   highPrice,
+			Low:    lowPrice,
+			Close:  closePrice,
+			Volume: volume * 100,
+		})
+	}
+
+	return bars, nil
+}
+
+func loadBarsFromBaoStock(symbol string) ([]marketBar, error) {
+	normalized, err := normalizeAShareSymbol(symbol)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(normalized, ".", 2)
+	baoCode := strings.ToLower(parts[1]) + "." + parts[0]
+
+	script := fmt.Sprintf(`import baostock as bs
+lg = bs.login()
+if lg.error_code != '0':
+    raise SystemExit(lg.error_msg)
+rs = bs.query_history_k_data_plus("%s","date,open,high,low,close,volume", start_date='2025-01-01', end_date='2030-12-31', frequency='d', adjustflag='3')
+rows = []
+while (rs.error_code == '0') and rs.next():
+    rows.append(rs.get_row_data())
+bs.logout()
+for row in rows:
+    print(",".join(row))
+`, baoCode)
+
+	cmd := exec.Command("python3", "-c", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("baostock failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+		return nil, errors.New("baostock returned no history")
+	}
+
+	bars := make([]marketBar, 0, len(lines))
+	for _, line := range lines {
+		parts := strings.Split(line, ",")
+		if len(parts) < 6 {
+			continue
+		}
+		openPrice, err := strconv.ParseFloat(parts[1], 64)
+		if err != nil {
+			return nil, err
+		}
+		highPrice, err := strconv.ParseFloat(parts[2], 64)
+		if err != nil {
+			return nil, err
+		}
+		lowPrice, err := strconv.ParseFloat(parts[3], 64)
+		if err != nil {
+			return nil, err
+		}
+		closePrice, err := strconv.ParseFloat(parts[4], 64)
+		if err != nil {
+			return nil, err
+		}
+		volume, err := strconv.ParseFloat(parts[5], 64)
+		if err != nil {
+			return nil, err
+		}
+
+		bars = append(bars, marketBar{
+			Date:   parts[0],
+			Open:   openPrice,
+			High:   highPrice,
+			Low:    lowPrice,
+			Close:  closePrice,
+			Volume: volume,
+		})
+	}
+
+	return bars, nil
+}
+
+func loadBarsFromEastmoney(symbol string) ([]marketBar, error) {
+	normalized, err := normalizeAShareSymbol(symbol)
+	if err != nil {
+		return nil, err
+	}
+	secID, err := eastmoneySecID(normalized)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf(
+		"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s&ut=fa5fd1943c7b386f172d6893dbfba10b&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=120",
+		secID,
+	)
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Referer", "https://quote.eastmoney.com/")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("eastmoney returned status %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return extractEastmoneyBars(body)
+}
+
 func loadBarsFromCSV(path string) ([]marketBar, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -521,6 +1111,589 @@ func loadBarsFromCSV(path string) ([]marketBar, error) {
 	}
 
 	return extractBars(rows)
+}
+
+type eastmoneyKlineResponse struct {
+	Data *struct {
+		Klines []string `json:"klines"`
+	} `json:"data"`
+}
+
+type tushareRequest struct {
+	APIName string         `json:"api_name"`
+	Token   string         `json:"token"`
+	Params  map[string]any `json:"params"`
+	Fields  string         `json:"fields"`
+}
+
+type tushareResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data *struct {
+		Fields []string `json:"fields"`
+		Items  [][]any  `json:"items"`
+	} `json:"data"`
+}
+
+type tushareStockBasicResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data *struct {
+		Fields []string `json:"fields"`
+		Items  [][]any  `json:"items"`
+	} `json:"data"`
+}
+
+type aShareSymbol struct {
+	Symbol   string
+	Name     string
+	Industry string
+}
+
+func extractEastmoneyBars(body []byte) ([]marketBar, error) {
+	var response eastmoneyKlineResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.Data == nil || len(response.Data.Klines) == 0 {
+		return nil, errors.New("eastmoney returned no kline data")
+	}
+
+	bars := make([]marketBar, 0, len(response.Data.Klines))
+	for index, line := range response.Data.Klines {
+		parts := strings.Split(line, ",")
+		if len(parts) < 6 {
+			return nil, fmt.Errorf("unexpected eastmoney kline format at row %d", index+1)
+		}
+
+		openPrice, err := strconv.ParseFloat(parts[1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid eastmoney open price at row %d: %w", index+1, err)
+		}
+		closePrice, err := strconv.ParseFloat(parts[2], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid eastmoney close price at row %d: %w", index+1, err)
+		}
+		highPrice, err := strconv.ParseFloat(parts[3], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid eastmoney high price at row %d: %w", index+1, err)
+		}
+		lowPrice, err := strconv.ParseFloat(parts[4], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid eastmoney low price at row %d: %w", index+1, err)
+		}
+		volume, err := strconv.ParseFloat(parts[5], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid eastmoney volume at row %d: %w", index+1, err)
+		}
+
+		bars = append(bars, marketBar{
+			Date:   parts[0],
+			Open:   openPrice,
+			High:   highPrice,
+			Low:    lowPrice,
+			Close:  closePrice,
+			Volume: volume,
+		})
+	}
+
+	return bars, nil
+}
+
+func loadAShareUniverse() ([]aShareSymbol, error) {
+	file, err := os.Open(aShareUniversePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	rows, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < 2 {
+		return nil, errors.New("a-share universe csv must include header and at least one row")
+	}
+
+	symbols := make([]aShareSymbol, 0, len(rows)-1)
+	for rowNumber, row := range rows[1:] {
+		if len(row) < 1 {
+			continue
+		}
+		symbol := strings.TrimSpace(row[0])
+		if symbol == "" {
+			continue
+		}
+		name := ""
+		industry := ""
+		if len(row) > 1 {
+			name = strings.TrimSpace(row[1])
+		}
+		if len(row) > 2 {
+			industry = strings.TrimSpace(row[2])
+		}
+		if !isAShareSymbol(symbol) {
+			return nil, fmt.Errorf("invalid A-share symbol %q at row %d", symbol, rowNumber+2)
+		}
+		symbols = append(symbols, aShareSymbol{
+			Symbol:   symbol,
+			Name:     name,
+			Industry: industry,
+		})
+	}
+	return symbols, nil
+}
+
+func rankCandidate(symbol string, name string, industry string, bars []marketBar, dataSource string, sourceErr string, strategy strategyConfig) (scanCandidate, error) {
+	closes := make([]float64, 0, len(bars))
+	volumes := make([]float64, 0, len(bars))
+	for _, bar := range bars {
+		closes = append(closes, bar.Close)
+		volumes = append(volumes, bar.Volume)
+	}
+	if len(closes) < strategy.LongWindow {
+		return scanCandidate{}, errors.New("not enough bars")
+	}
+
+	latest := bars[len(bars)-1]
+	shortMA := average(closes[len(closes)-strategy.ShortWindow:])
+	longMA := average(closes[len(closes)-strategy.LongWindow:])
+	avgVolume := average(volumes[len(volumes)-strategy.LongWindow:])
+	score := (shortMA - longMA) / longMA
+	action := "HOLD"
+	reason := buildReasonWithSource("moving averages are neutral", withSourceSuffix(dataSource, sourceErr))
+	trigger := fmt.Sprintf("Break above %.2f with volume expansion", shortMA)
+
+	switch {
+	case shortMA > longMA:
+		action = "BUY"
+		reason = buildReasonWithSource("short moving average crossed above long moving average", withSourceSuffix(dataSource, sourceErr))
+		trigger = fmt.Sprintf("Hold above %.2f and keep short MA over long MA", shortMA)
+	case shortMA < longMA:
+		action = "SELL"
+		reason = buildReasonWithSource("short moving average crossed below long moving average", withSourceSuffix(dataSource, sourceErr))
+		trigger = fmt.Sprintf("Only reassess if price recovers above %.2f", longMA)
+	}
+
+	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
+
+	return scanCandidate{
+		Symbol:       symbol,
+		Name:         name,
+		Industry:     industry,
+		Action:       action,
+		Bucket:       bucket,
+		Score:        score,
+		AvgVolume:    avgVolume,
+		Trigger:      trigger,
+		TriggerPrice: triggerPrice,
+		AvoidTags:    avoidTags,
+		ShortMA:      shortMA,
+		LongMA:       longMA,
+		ClosePrice:   latest.Close,
+		MarketDate:   latest.Date,
+		Reason:       reason,
+		Plan:         planForBucket(bucket, action, shortMA, longMA, avgVolume),
+	}, nil
+}
+
+func bucketPriority(bucket string) int {
+	switch bucket {
+	case "建议关注":
+		return 0
+	case "观望":
+		return 1
+	case "回避":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func classifyCandidate(name string, closePrice float64, shortMA float64, longMA float64, avgVolume float64, action string, score float64, reason string, trigger string) (string, string, string, float64, []string) {
+	if isSTName(name) {
+		return "回避", "ST or *ST stock excluded from attention list", "Only reassess after ST risk is removed", longMA, []string{"ST风险"}
+	}
+	if avgVolume < 1_000_000 {
+		return "回避", fmt.Sprintf("average volume %.0f is too low for this scan", avgVolume), "Only reassess after liquidity improves", shortMA, []string{"低流动性"}
+	}
+
+	stopLine := longMA * 0.97
+	if closePrice < stopLine {
+		return "回避", fmt.Sprintf("price %.2f is below the stop line %.2f", closePrice, stopLine), fmt.Sprintf("Only reassess if price reclaims %.2f", longMA), longMA, []string{"跌破止损线"}
+	}
+
+	if action == "BUY" && score > 0.01 && closePrice > shortMA && shortMA > longMA {
+		return "建议关注", reason, trigger, shortMA, nil
+	}
+
+	if action == "HOLD" || (action == "BUY" && score > 0) {
+		return "观望", reason, fmt.Sprintf("Watch for a clean move above %.2f and volume above %.0f", shortMA, avgVolume), shortMA, nil
+	}
+
+	return "回避", reason, trigger, longMA, []string{"趋势偏弱"}
+}
+
+func isSTName(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	return strings.HasPrefix(upper, "ST") || strings.HasPrefix(upper, "*ST")
+}
+
+func planForBucket(bucket string, action string, shortMA float64, longMA float64, avgVolume float64) string {
+	switch bucket {
+	case "建议关注":
+		return fmt.Sprintf("可纳入明日优先观察名单，若继续站稳 %.2f 上方并维持放量，可考虑分批跟踪", shortMA)
+	case "观望":
+		return fmt.Sprintf("暂不追入，等待价格有效站上 %.2f 且成交量高于 %.0f 后再确认", shortMA, avgVolume)
+	case "回避":
+		if action == "SELL" {
+			return fmt.Sprintf("当前偏弱，优先回避，至少等重新站回 %.2f 上方再评估", longMA)
+		}
+		return "当前不纳入候选池，先回避，等待流动性或风险条件改善"
+	default:
+		return "无明确计划"
+	}
+}
+
+func writeAShareScanReports(candidates []scanCandidate) error {
+	textPath := filepath.Join(reportsDir, "a_share_scan.txt")
+	htmlPath := filepath.Join(reportsDir, "a_share_scan.html")
+	focusTextPath := filepath.Join(reportsDir, "a_share_focus.txt")
+	focusHTMLPath := filepath.Join(reportsDir, "a_share_focus.html")
+	watch := filterCandidatesByBucket(candidates, "建议关注")
+	observe := filterCandidatesByBucket(candidates, "观望")
+	avoid := filterCandidatesByBucket(candidates, "回避")
+
+	var textBuilder strings.Builder
+	textBuilder.WriteString("A-Share Scan Report\n\n")
+	writeBucketText(&textBuilder, "建议关注", watch)
+	writeBucketText(&textBuilder, "观望", observe)
+	writeBucketText(&textBuilder, "回避", avoid)
+
+	watchRows := buildBucketRows(watch)
+	observeRows := buildBucketRows(observe)
+	avoidRows := buildBucketRows(avoid)
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A-Share Scan</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f3efe8; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1 { margin: 0 0 16px; font-size: 36px; }
+    h2 { margin: 28px 0 12px; font-size: 24px; }
+    table { width: 100%%; border-collapse: collapse; font-size: 15px; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6d6559; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>A-Share Scan Report</h1>
+      <h2>建议关注</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+      <h2>观望</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+      <h2>回避</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`, watchRows, observeRows, avoidRows)
+
+	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	focusText := buildFocusText(watch)
+	focusHTML := buildFocusHTML(watch)
+	if err := os.WriteFile(focusTextPath, []byte(focusText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(focusHTMLPath, []byte(focusHTML), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildFocusText(candidates []scanCandidate) string {
+	var builder strings.Builder
+	builder.WriteString("A-Share Focus List\n\n")
+	if len(candidates) == 0 {
+		builder.WriteString("今日无建议关注标的。\n")
+		return builder.String()
+	}
+
+	for i, candidate := range candidates {
+		fmt.Fprintf(&builder, "%d. %s %s\n", i+1, candidate.Symbol, candidate.Name)
+		fmt.Fprintf(&builder, "   Market date: %s\n", candidate.MarketDate)
+		fmt.Fprintf(&builder, "   Score: %.4f\n", candidate.Score)
+		fmt.Fprintf(&builder, "   Close: %.2f\n", candidate.ClosePrice)
+		fmt.Fprintf(&builder, "   Reason: %s\n", candidate.Reason)
+		fmt.Fprintf(&builder, "   Trigger: %s\n", candidate.Trigger)
+		fmt.Fprintf(&builder, "   Plan: %s\n\n", candidate.Plan)
+	}
+	return builder.String()
+}
+
+func buildFocusHTML(candidates []scanCandidate) string {
+	rows := buildBucketRows(candidates)
+	return fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A-Share Focus</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1 { margin: 0 0 16px; font-size: 36px; }
+    table { width: 100%%; border-collapse: collapse; font-size: 15px; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6d6559; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>A-Share Focus List</h1>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`, rows)
+}
+
+func filterCandidatesByBucket(candidates []scanCandidate, bucket string) []scanCandidate {
+	filtered := make([]scanCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Bucket == bucket {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
+}
+
+func writeBucketText(builder *strings.Builder, title string, candidates []scanCandidate) {
+	builder.WriteString(title + "\n")
+	if len(candidates) == 0 {
+		builder.WriteString("  无\n\n")
+		return
+	}
+
+	for i, candidate := range candidates {
+		fmt.Fprintf(builder, "%d. %s %s\n", i+1, candidate.Symbol, candidate.Name)
+		if candidate.Industry != "" {
+			fmt.Fprintf(builder, "   Industry: %s\n", candidate.Industry)
+		}
+		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
+		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
+		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
+		fmt.Fprintf(builder, "   Avg Volume: %.0f\n", candidate.AvgVolume)
+		fmt.Fprintf(builder, "   Short/Long MA: %.2f / %.2f\n", candidate.ShortMA, candidate.LongMA)
+		fmt.Fprintf(builder, "   Close: %.2f\n", candidate.ClosePrice)
+		fmt.Fprintf(builder, "   Reason: %s\n", candidate.Reason)
+		fmt.Fprintf(builder, "   Trigger: %s (%.2f)\n", candidate.Trigger, candidate.TriggerPrice)
+		if len(candidate.AvoidTags) > 0 {
+			fmt.Fprintf(builder, "   Avoid Tags: %s\n", strings.Join(candidate.AvoidTags, ", "))
+		}
+		fmt.Fprintf(builder, "   Plan: %s\n\n", candidate.Plan)
+	}
+}
+
+func buildBucketRows(candidates []scanCandidate) string {
+	if len(candidates) == 0 {
+		return `<tr><td colspan="11">No candidates</td></tr>`
+	}
+
+	var rows strings.Builder
+	for i, candidate := range candidates {
+		industry := candidate.Industry
+		if industry == "" {
+			industry = "-"
+		}
+		avoidTags := ""
+		if len(candidate.AvoidTags) > 0 {
+			avoidTags = "<br><small>Tags: " + html.EscapeString(strings.Join(candidate.AvoidTags, ", ")) + "</small>"
+		}
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small></td><td>%s</td><td>%.4f</td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small>%s</td><td>%s</td></tr>`,
+			i+1,
+			html.EscapeString(candidate.Symbol),
+			html.EscapeString(candidate.Name),
+			html.EscapeString(industry),
+			html.EscapeString(candidate.Action),
+			candidate.Score,
+			candidate.AvgVolume,
+			candidate.ShortMA,
+			candidate.LongMA,
+			candidate.ClosePrice,
+			html.EscapeString(candidate.Reason),
+			html.EscapeString(candidate.Trigger),
+			candidate.TriggerPrice,
+			avoidTags,
+			html.EscapeString(candidate.Plan),
+		)
+	}
+	return rows.String()
+}
+
+func isAShareSymbol(symbol string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if strings.Contains(normalized, ".") {
+		parts := strings.SplitN(normalized, ".", 2)
+		if len(parts) == 2 && isDigits(parts[0]) && len(parts[0]) == 6 {
+			switch parts[1] {
+			case "SH", "SZ", "BJ":
+				return true
+			}
+		}
+	}
+
+	return isDigits(normalized) && len(normalized) == 6
+}
+
+func normalizeAShareSymbol(symbol string) (string, error) {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if strings.Contains(normalized, ".") {
+		parts := strings.SplitN(normalized, ".", 2)
+		if len(parts) != 2 || !isDigits(parts[0]) || len(parts[0]) != 6 {
+			return "", fmt.Errorf("invalid A-share symbol %q", symbol)
+		}
+		switch parts[1] {
+		case "SH", "SZ", "BJ":
+			return parts[0] + "." + parts[1], nil
+		default:
+			return "", fmt.Errorf("unsupported A-share exchange suffix %q", parts[1])
+		}
+	}
+
+	if !isDigits(normalized) || len(normalized) != 6 {
+		return "", fmt.Errorf("invalid A-share symbol %q", symbol)
+	}
+
+	switch {
+	case strings.HasPrefix(normalized, "600"),
+		strings.HasPrefix(normalized, "601"),
+		strings.HasPrefix(normalized, "603"),
+		strings.HasPrefix(normalized, "605"),
+		strings.HasPrefix(normalized, "688"),
+		strings.HasPrefix(normalized, "689"):
+		return normalized + ".SH", nil
+	case strings.HasPrefix(normalized, "000"),
+		strings.HasPrefix(normalized, "001"),
+		strings.HasPrefix(normalized, "002"),
+		strings.HasPrefix(normalized, "003"),
+		strings.HasPrefix(normalized, "300"),
+		strings.HasPrefix(normalized, "301"):
+		return normalized + ".SZ", nil
+	case strings.HasPrefix(normalized, "430"),
+		strings.HasPrefix(normalized, "440"),
+		strings.HasPrefix(normalized, "830"),
+		strings.HasPrefix(normalized, "831"),
+		strings.HasPrefix(normalized, "832"),
+		strings.HasPrefix(normalized, "833"),
+		strings.HasPrefix(normalized, "834"),
+		strings.HasPrefix(normalized, "835"),
+		strings.HasPrefix(normalized, "836"),
+		strings.HasPrefix(normalized, "837"),
+		strings.HasPrefix(normalized, "838"),
+		strings.HasPrefix(normalized, "839"),
+		strings.HasPrefix(normalized, "870"),
+		strings.HasPrefix(normalized, "871"),
+		strings.HasPrefix(normalized, "872"),
+		strings.HasPrefix(normalized, "873"),
+		strings.HasPrefix(normalized, "920"):
+		return normalized + ".BJ", nil
+	default:
+		return "", fmt.Errorf("cannot infer A-share exchange for %q", symbol)
+	}
+}
+
+func eastmoneySecID(symbol string) (string, error) {
+	normalized, err := normalizeAShareSymbol(symbol)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.SplitN(normalized, ".", 2)
+
+	switch parts[1] {
+	case "SH":
+		return "1." + parts[0], nil
+	case "SZ":
+		return "0." + parts[0], nil
+	case "BJ":
+		return "0." + parts[0], nil
+	default:
+		return "", fmt.Errorf("unsupported exchange suffix %q", parts[1])
+	}
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func tushareTSCode(symbol string) (string, error) {
+	normalized, err := normalizeAShareSymbol(symbol)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.SplitN(normalized, ".", 2)
+	return parts[0] + "." + parts[1], nil
+}
+
+func formatTradeDate(value string) string {
+	if len(value) == 8 {
+		return value[:4] + "-" + value[4:6] + "-" + value[6:]
+	}
+	return value
+}
+
+func toFloat(value any) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case string:
+		return strconv.ParseFloat(v, 64)
+	default:
+		return 0, fmt.Errorf("unexpected numeric type %T", value)
+	}
 }
 
 func extractBars(rows [][]string) ([]marketBar, error) {
