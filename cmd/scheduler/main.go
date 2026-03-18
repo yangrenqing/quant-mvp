@@ -1708,7 +1708,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	if err := writeCSVFile(csvPath, csvRows); err != nil {
 		return err
 	}
-	return nil
+	return writeDashboardReports()
 }
 
 func buildEquityCurveSVG(curve []backtestTrade) string {
@@ -1821,6 +1821,109 @@ func writeCSVFile(path string, rows [][]string) error {
 	}
 	writer.Flush()
 	return writer.Error()
+}
+
+func writeDashboardReports() error {
+	textPath := filepath.Join(reportsDir, "dashboard.txt")
+	htmlPath := filepath.Join(reportsDir, "dashboard.html")
+
+	sections := []struct {
+		title string
+		path  string
+	}{
+		{title: "Latest Plan", path: filepath.Join(reportsDir, "latest_plan.txt")},
+		{title: "A-Share Focus", path: filepath.Join(reportsDir, "a_share_focus.txt")},
+		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
+		{title: "Portfolio Backtest", path: filepath.Join(reportsDir, "portfolio_backtest.txt")},
+	}
+
+	type dashboardSection struct {
+		Title   string
+		Content string
+		Stamp   string
+	}
+	rendered := make([]dashboardSection, 0, len(sections))
+	for _, section := range sections {
+		content, stamp := readDashboardSection(section.path)
+		rendered = append(rendered, dashboardSection{
+			Title:   section.title,
+			Content: content,
+			Stamp:   stamp,
+		})
+	}
+
+	var textBuilder strings.Builder
+	textBuilder.WriteString("Quant MVP Dashboard\n\n")
+	for _, section := range rendered {
+		textBuilder.WriteString(section.Title + "\n")
+		if section.Stamp != "" {
+			textBuilder.WriteString("Updated: " + section.Stamp + "\n")
+		}
+		textBuilder.WriteString(section.Content + "\n\n")
+	}
+
+	var cards strings.Builder
+	for _, section := range rendered {
+		fmt.Fprintf(&cards, `<section class="card"><h2>%s</h2><div class="stamp">%s</div><pre>%s</pre></section>`,
+			html.EscapeString(section.Title),
+			html.EscapeString(section.Stamp),
+			html.EscapeString(section.Content),
+		)
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quant MVP Dashboard</title>
+  <style>
+    :root { --bg: #efe8dc; --card: #fffaf3; --ink: #1f1b16; --muted: #746a5d; --border: #d8cebe; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: radial-gradient(circle at top, #f7f1e7, #e8dcc7 68%%); color: var(--ink); }
+    .wrap { max-width: 1280px; margin: 36px auto; padding: 0 20px 40px; }
+    h1 { margin: 0 0 18px; font-size: 42px; }
+    .lead { margin: 0 0 24px; color: var(--muted); font-size: 17px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 20px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); min-height: 280px; }
+    h2 { margin: 0 0 8px; font-size: 24px; }
+    .stamp { margin-bottom: 12px; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 14px/1.55 "SFMono-Regular", Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Quant MVP Dashboard</h1>
+    <p class="lead">Daily overview of the latest plan, focus list, market scan, and portfolio backtest.</p>
+    <div class="grid">%s</div>
+  </div>
+</body>
+</html>`, cards.String())
+
+	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readDashboardSection(path string) (string, string) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "Not generated yet.", ""
+	}
+	info, statErr := os.Stat(path)
+	stamp := ""
+	if statErr == nil {
+		stamp = info.ModTime().Format("2006-01-02 15:04:05")
+	}
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		trimmed = "Not generated yet."
+	}
+	return trimmed, stamp
 }
 
 func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
@@ -2679,7 +2782,7 @@ func writePlanReports(signal strategySignal, now time.Time) error {
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
 		return err
 	}
-	return nil
+	return writeDashboardReports()
 }
 
 func nextTradingDateFromSignal(signal strategySignal, now time.Time) time.Time {
@@ -3352,7 +3455,7 @@ func writeAShareScanReports(candidates []scanCandidate) error {
 	if err := os.WriteFile(focusHTMLPath, []byte(focusHTML), 0o644); err != nil {
 		return err
 	}
-	return nil
+	return writeDashboardReports()
 }
 
 func buildFocusText(candidates []scanCandidate) string {
