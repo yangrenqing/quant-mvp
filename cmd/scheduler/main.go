@@ -34,11 +34,13 @@ const (
 )
 
 type config struct {
-	AppName  string
-	DB       dbConfig
-	Schedule scheduleConfig
-	Strategy strategyConfig
-	Risk     riskConfig
+	AppName   string
+	DB        dbConfig
+	Schedule  scheduleConfig
+	Strategy  strategyConfig
+	Risk      riskConfig
+	Portfolio portfolioConfig
+	Regime    regimeConfig
 }
 
 type dbConfig struct {
@@ -64,6 +66,29 @@ type riskConfig struct {
 	MaxPosition      int
 	StopLossPct      float64
 	SkipRepeatSignal bool
+}
+
+type portfolioConfig struct {
+	RebalanceIntervalDays  int
+	WeightDriftThreshold   float64
+	MinHoldings            int
+	MaxPositionWeight      float64
+	MaxCashShare           float64
+	MaxVolatility          float64
+	MinAverageTurnover     float64
+	OverheatThreshold      float64
+	MaxHoldingDrawdown     float64
+	MinTrendGap            float64
+	StopCooldownDays       int
+	ExitCooldownDays       int
+	TrendBreakCooldownDays int
+}
+
+type regimeConfig struct {
+	CautiousExposure float64
+	RiskOffExposure  float64
+	RiskOffDrawdown  float64
+	CautiousDrawdown float64
 }
 
 type marketBar struct {
@@ -281,7 +306,7 @@ func main() {
 		if *fromDate == "" || *toDate == "" {
 			logger.Fatalf("portfolio backtest requires --from and --to")
 		}
-		result, err := runPortfolioBacktest(cfg.Strategy, cfg.Risk, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps, *topN)
+		result, err := runPortfolioBacktest(cfg.Strategy, cfg.Risk, cfg.Portfolio, cfg.Regime, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps, *topN)
 		if err != nil {
 			logger.Fatalf("portfolio backtest failed: %v", err)
 		}
@@ -435,7 +460,7 @@ func runBatchBacktest(strategy strategyConfig, risk riskConfig, fromDate string,
 	return results, nil
 }
 
-func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64, topN int) (portfolioBacktestResult, error) {
+func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio portfolioConfig, regime regimeConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64, topN int) (portfolioBacktestResult, error) {
 	symbols, err := loadAShareUniverse()
 	if err != nil {
 		return portfolioBacktestResult{}, err
@@ -493,16 +518,6 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 	latestSelection := make([]scanCandidate, 0)
 	lastRegimeLabel := "neutral"
 	lastExposureLevel := 1.0
-	const rebalanceInterval = 5
-	const weightDriftThreshold = 0.20
-	const minHoldings = 2
-	const maxPositionWeight = 0.45
-	const maxCashShare = 0.20
-	const maxVolatility = 0.18
-	const minAverageTurnover = 30_000_000.0
-	const overheatThreshold = 0.12
-	const maxHoldingDrawdown = 0.15
-	const minTrendGap = 0.02
 
 	for dayIdx, date := range dates {
 		candidates := make([]scanCandidate, 0, len(series))
@@ -521,13 +536,13 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 			if cooldownUntil[item.meta.Symbol] != "" && date <= cooldownUntil[item.meta.Symbol] {
 				continue
 			}
-			if candidate.Score > 0 && candidate.Bucket != "回避" && passPortfolioCandidateFilters(history, candidate, minAverageTurnover, maxVolatility, overheatThreshold, minTrendGap) {
+			if candidate.Score > 0 && candidate.Bucket != "回避" && passPortfolioCandidateFilters(history, candidate, portfolio.MinAverageTurnover, portfolio.MaxVolatility, portfolio.OverheatThreshold, portfolio.MinTrendGap) {
 				candidates = append(candidates, candidate)
 			}
 		}
 
 		relativeStrengthFloor := candidateMedianScore(candidates)
-		regimeLabel, targetExposure := benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), strategy.LongWindow)
+		regimeLabel, targetExposure := benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), strategy.LongWindow, regime)
 		lastRegimeLabel = regimeLabel
 		lastExposureLevel = targetExposure
 		if targetExposure > 0 {
@@ -542,7 +557,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 			candidates = nil
 		}
 
-		candidates = selectPortfolioCandidates(candidates, topN, minHoldings)
+		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings)
 		if len(candidates) > 0 {
 			latestSelection = append([]scanCandidate(nil), candidates...)
 		}
@@ -564,7 +579,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 			dayEquity += float64(shares) * bar.Close
 		}
 
-		shouldRebalance := dayIdx == 0 || dayIdx%rebalanceInterval == 0
+		shouldRebalance := dayIdx == 0 || dayIdx%portfolio.RebalanceIntervalDays == 0
 
 		// Always remove names that dropped out of the target set.
 		for symbol, shares := range holdings {
@@ -585,18 +600,18 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 				holdings[symbol] = 0
 				delete(entryPrices, symbol)
 				delete(holdingPeaks, symbol)
-				cooldownUntil[symbol] = portfolioCooldownDate(date, 5)
+				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
 				rebalanceCount++
 				continue
 			}
-			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-maxHoldingDrawdown) {
+			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
 				execPrice := bar.Close * (1 - slippageRate)
 				fee := float64(shares) * execPrice * feeRate
 				cash += float64(shares)*execPrice - fee
 				holdings[symbol] = 0
 				delete(entryPrices, symbol)
 				delete(holdingPeaks, symbol)
-				cooldownUntil[symbol] = portfolioCooldownDate(date, 5)
+				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
 				rebalanceCount++
 				continue
 			}
@@ -607,7 +622,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 				holdings[symbol] = 0
 				delete(entryPrices, symbol)
 				delete(holdingPeaks, symbol)
-				cooldownUntil[symbol] = portfolioCooldownDate(date, 4)
+				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.TrendBreakCooldownDays)
 				rebalanceCount++
 				continue
 			}
@@ -620,7 +635,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 			holdings[symbol] = 0
 			delete(entryPrices, symbol)
 			delete(holdingPeaks, symbol)
-			cooldownUntil[symbol] = portfolioCooldownDate(date, 3)
+			cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.ExitCooldownDays)
 			rebalanceCount++
 		}
 
@@ -635,16 +650,16 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 				}
 			}
 			targetSlots := len(candidates)
-			if targetSlots < minHoldings {
-				targetSlots = minHoldings
+			if targetSlots < portfolio.MinHoldings {
+				targetSlots = portfolio.MinHoldings
 			}
-			effectiveCashShare := maxCashShare + (1 - targetExposure)
+			effectiveCashShare := portfolio.MaxCashShare + (1 - targetExposure)
 			if effectiveCashShare > 0.85 {
 				effectiveCashShare = 0.85
 			}
 			deployableCapital := targetValue * (1 - effectiveCashShare)
 			slotValue := deployableCapital / float64(targetSlots)
-			maxSlotValue := targetValue * maxPositionWeight
+			maxSlotValue := targetValue * portfolio.MaxPositionWeight
 			if slotValue > maxSlotValue {
 				slotValue = maxSlotValue
 			}
@@ -665,7 +680,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 				if targetValueForName > 0 {
 					drift = math.Abs(currentValue-targetValueForName) / targetValueForName
 				}
-				if currentShares > 0 && drift < weightDriftThreshold {
+				if currentShares > 0 && drift < portfolio.WeightDriftThreshold {
 					continue
 				}
 				diff := targetShares - currentShares
@@ -1173,9 +1188,9 @@ func candidateMedianScore(candidates []scanCandidate) float64 {
 	return scores[len(scores)/2]
 }
 
-func benchmarkMarketRegime(history []marketBar, longWindow int) (string, float64) {
+func benchmarkMarketRegime(history []marketBar, longWindow int, regime regimeConfig) (string, float64) {
 	if len(history) < longWindow {
-		return "cautious", 0.45
+		return "cautious", regime.CautiousExposure
 	}
 
 	closes := make([]float64, 0, len(history))
@@ -1197,11 +1212,11 @@ func benchmarkMarketRegime(history []marketBar, longWindow int) (string, float64
 		drawdown = (peak - latest.Close) / peak
 	}
 
-	if latest.Close < longMA || drawdown > 0.12 {
-		return "risk_off", 0
+	if latest.Close < longMA || drawdown > regime.RiskOffDrawdown {
+		return "risk_off", regime.RiskOffExposure
 	}
-	if latest.Close < shortMA || drawdown > 0.06 {
-		return "cautious", 0.45
+	if latest.Close < shortMA || drawdown > regime.CautiousDrawdown {
+		return "cautious", regime.CautiousExposure
 	}
 	return "risk_on", 1.0
 }
@@ -2143,6 +2158,114 @@ func loadConfig(path string) (config, error) {
 				}
 				cfg.Risk.SkipRepeatSignal = flag
 			}
+		case "portfolio":
+			switch key {
+			case "rebalance_interval_days":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.rebalance_interval_days: %w", convErr)
+				}
+				cfg.Portfolio.RebalanceIntervalDays = v
+			case "weight_drift_threshold":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.weight_drift_threshold: %w", convErr)
+				}
+				cfg.Portfolio.WeightDriftThreshold = v
+			case "min_holdings":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.min_holdings: %w", convErr)
+				}
+				cfg.Portfolio.MinHoldings = v
+			case "max_position_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.max_position_weight: %w", convErr)
+				}
+				cfg.Portfolio.MaxPositionWeight = v
+			case "max_cash_share":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.max_cash_share: %w", convErr)
+				}
+				cfg.Portfolio.MaxCashShare = v
+			case "max_volatility":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.max_volatility: %w", convErr)
+				}
+				cfg.Portfolio.MaxVolatility = v
+			case "min_average_turnover":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.min_average_turnover: %w", convErr)
+				}
+				cfg.Portfolio.MinAverageTurnover = v
+			case "overheat_threshold":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.overheat_threshold: %w", convErr)
+				}
+				cfg.Portfolio.OverheatThreshold = v
+			case "max_holding_drawdown":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.max_holding_drawdown: %w", convErr)
+				}
+				cfg.Portfolio.MaxHoldingDrawdown = v
+			case "min_trend_gap":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.min_trend_gap: %w", convErr)
+				}
+				cfg.Portfolio.MinTrendGap = v
+			case "stop_cooldown_days":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.stop_cooldown_days: %w", convErr)
+				}
+				cfg.Portfolio.StopCooldownDays = v
+			case "exit_cooldown_days":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.exit_cooldown_days: %w", convErr)
+				}
+				cfg.Portfolio.ExitCooldownDays = v
+			case "trend_break_cooldown_days":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.trend_break_cooldown_days: %w", convErr)
+				}
+				cfg.Portfolio.TrendBreakCooldownDays = v
+			}
+		case "regime":
+			switch key {
+			case "cautious_exposure":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid regime.cautious_exposure: %w", convErr)
+				}
+				cfg.Regime.CautiousExposure = v
+			case "risk_off_exposure":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid regime.risk_off_exposure: %w", convErr)
+				}
+				cfg.Regime.RiskOffExposure = v
+			case "risk_off_drawdown":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid regime.risk_off_drawdown: %w", convErr)
+				}
+				cfg.Regime.RiskOffDrawdown = v
+			case "cautious_drawdown":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid regime.cautious_drawdown: %w", convErr)
+				}
+				cfg.Regime.CautiousDrawdown = v
+			}
 		}
 	}
 
@@ -2187,6 +2310,57 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Risk.StopLossPct <= 0 {
 		cfg.Risk.StopLossPct = 0.03
+	}
+	if cfg.Portfolio.RebalanceIntervalDays <= 0 {
+		cfg.Portfolio.RebalanceIntervalDays = 5
+	}
+	if cfg.Portfolio.WeightDriftThreshold <= 0 {
+		cfg.Portfolio.WeightDriftThreshold = 0.20
+	}
+	if cfg.Portfolio.MinHoldings <= 0 {
+		cfg.Portfolio.MinHoldings = 2
+	}
+	if cfg.Portfolio.MaxPositionWeight <= 0 {
+		cfg.Portfolio.MaxPositionWeight = 0.45
+	}
+	if cfg.Portfolio.MaxCashShare < 0 {
+		cfg.Portfolio.MaxCashShare = 0.20
+	}
+	if cfg.Portfolio.MaxVolatility <= 0 {
+		cfg.Portfolio.MaxVolatility = 0.18
+	}
+	if cfg.Portfolio.MinAverageTurnover <= 0 {
+		cfg.Portfolio.MinAverageTurnover = 30_000_000
+	}
+	if cfg.Portfolio.OverheatThreshold <= 0 {
+		cfg.Portfolio.OverheatThreshold = 0.12
+	}
+	if cfg.Portfolio.MaxHoldingDrawdown <= 0 {
+		cfg.Portfolio.MaxHoldingDrawdown = 0.15
+	}
+	if cfg.Portfolio.MinTrendGap <= 0 {
+		cfg.Portfolio.MinTrendGap = 0.02
+	}
+	if cfg.Portfolio.StopCooldownDays <= 0 {
+		cfg.Portfolio.StopCooldownDays = 5
+	}
+	if cfg.Portfolio.ExitCooldownDays <= 0 {
+		cfg.Portfolio.ExitCooldownDays = 3
+	}
+	if cfg.Portfolio.TrendBreakCooldownDays <= 0 {
+		cfg.Portfolio.TrendBreakCooldownDays = 4
+	}
+	if cfg.Regime.CautiousExposure <= 0 {
+		cfg.Regime.CautiousExposure = 0.45
+	}
+	if cfg.Regime.RiskOffExposure < 0 {
+		cfg.Regime.RiskOffExposure = 0
+	}
+	if cfg.Regime.RiskOffDrawdown <= 0 {
+		cfg.Regime.RiskOffDrawdown = 0.12
+	}
+	if cfg.Regime.CautiousDrawdown <= 0 {
+		cfg.Regime.CautiousDrawdown = 0.06
 	}
 
 	return cfg, nil

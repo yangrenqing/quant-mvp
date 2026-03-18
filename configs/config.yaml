@@ -20,3 +20,24 @@ risk:
   max_position: 1
   stop_loss_pct: 0.03
   skip_repeat_signal: true
+
+portfolio:
+  rebalance_interval_days: 5
+  weight_drift_threshold: 0.20
+  min_holdings: 2
+  max_position_weight: 0.45
+  max_cash_share: 0.20
+  max_volatility: 0.18
+  min_average_turnover: 30000000
+  overheat_threshold: 0.12
+  max_holding_drawdown: 0.15
+  min_trend_gap: 0.02
+  stop_cooldown_days: 5
+  exit_cooldown_days: 3
+  trend_break_cooldown_days: 4
+
+regime:
+  cautious_exposure: 0.45
+  risk_off_exposure: 0.00
+  risk_off_drawdown: 0.12
+  cautious_drawdown: 0.06
