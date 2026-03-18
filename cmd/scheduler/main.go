@@ -9,6 +9,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -89,22 +90,33 @@ type positionState struct {
 }
 
 type scanCandidate struct {
-	Symbol       string
-	Name         string
-	Industry     string
-	Action       string
-	Bucket       string
-	Score        float64
-	AvgVolume    float64
-	Trigger      string
-	TriggerPrice float64
-	AvoidTags    []string
-	ShortMA      float64
-	LongMA       float64
-	ClosePrice   float64
-	MarketDate   string
-	Reason       string
-	Plan         string
+	Symbol             string
+	Name               string
+	Industry           string
+	Action             string
+	Bucket             string
+	Score              float64
+	AvgVolume          float64
+	Trigger            string
+	TriggerPrice       float64
+	AvoidTags          []string
+	ShortMA            float64
+	LongMA             float64
+	ClosePrice         float64
+	MarketDate         string
+	Reason             string
+	Plan               string
+	HasBacktest        bool
+	BacktestMode       string
+	BacktestFrom       string
+	BacktestTo         string
+	BacktestReturn     float64
+	BacktestAnnualized float64
+	BacktestBenchmark  float64
+	BacktestExcess     float64
+	BacktestDrawdown   float64
+	BacktestWinRate    float64
+	BacktestTrades     int
 }
 
 type backtestTrade struct {
@@ -119,22 +131,28 @@ type backtestTrade struct {
 }
 
 type backtestResult struct {
-	Symbol      string
-	Name        string
-	FromDate    string
-	ToDate      string
-	InitialCash float64
-	FinalEquity float64
-	TotalReturn float64
-	MaxDrawdown float64
-	TradeCount  int
-	WinRate     float64
-	Mode        string
-	FeeBps      float64
-	SlippageBps float64
-	TotalFees   float64
-	Trades      []backtestTrade
-	EquityCurve []backtestTrade
+	Symbol            string
+	Name              string
+	FromDate          string
+	ToDate            string
+	InitialCash       float64
+	FinalEquity       float64
+	TotalReturn       float64
+	MaxDrawdown       float64
+	TradeCount        int
+	WinRate           float64
+	Mode              string
+	FeeBps            float64
+	SlippageBps       float64
+	TotalFees         float64
+	AnnualizedReturn  float64
+	BenchmarkReturn   float64
+	BenchmarkEquity   float64
+	BenchmarkDrawdown float64
+	ExcessReturn      float64
+	TradingDays       int
+	Trades            []backtestTrade
+	EquityCurve       []backtestTrade
 }
 
 func main() {
@@ -242,6 +260,7 @@ func runAShareScan(strategy strategyConfig, topN int) error {
 	if err != nil {
 		return err
 	}
+	backtestSnapshot, _ := loadBacktestSnapshot(filepath.Join(reportsDir, "backtest_scan.csv"))
 
 	candidates := make([]scanCandidate, 0, len(symbols))
 	for _, symbol := range symbols {
@@ -260,6 +279,9 @@ func runAShareScan(strategy strategyConfig, topN int) error {
 		candidate, err := rankCandidate(symbol.Symbol, symbol.Name, symbol.Industry, bars, dataSource, sourceErr, strategy)
 		if err != nil {
 			continue
+		}
+		if metrics, ok := backtestSnapshot[candidate.Symbol]; ok {
+			applyBacktestMetrics(&candidate, metrics)
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -471,30 +493,80 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 	if completedTrades > 0 {
 		winRate = float64(winningTrades) / float64(completedTrades)
 	}
+	benchmarkEquity, benchmarkReturn, benchmarkDrawdown := simulateBuyAndHoldBenchmark(filtered, initialCash, feeRate, slippageRate)
+	annualizedReturn := annualizeReturn(finalEquity/initialCash, len(filtered))
 
 	return backtestResult{
-		Symbol:      symbol,
-		Name:        name,
-		FromDate:    fromDate,
-		ToDate:      toDate,
-		InitialCash: initialCash,
-		FinalEquity: finalEquity,
-		TotalReturn: (finalEquity - initialCash) / initialCash,
-		MaxDrawdown: maxDrawdown,
-		TradeCount:  len(trades),
-		WinRate:     winRate,
-		Mode:        mode,
-		FeeBps:      feeBps,
-		SlippageBps: slippageBps,
-		TotalFees:   totalFees,
-		Trades:      trades,
-		EquityCurve: equityCurve,
+		Symbol:            symbol,
+		Name:              name,
+		FromDate:          fromDate,
+		ToDate:            toDate,
+		InitialCash:       initialCash,
+		FinalEquity:       finalEquity,
+		TotalReturn:       (finalEquity - initialCash) / initialCash,
+		MaxDrawdown:       maxDrawdown,
+		TradeCount:        len(trades),
+		WinRate:           winRate,
+		Mode:              mode,
+		FeeBps:            feeBps,
+		SlippageBps:       slippageBps,
+		TotalFees:         totalFees,
+		AnnualizedReturn:  annualizedReturn,
+		BenchmarkReturn:   benchmarkReturn,
+		BenchmarkEquity:   benchmarkEquity,
+		BenchmarkDrawdown: benchmarkDrawdown,
+		ExcessReturn:      ((finalEquity - initialCash) / initialCash) - benchmarkReturn,
+		TradingDays:       len(filtered),
+		Trades:            trades,
+		EquityCurve:       equityCurve,
 	}, nil
+}
+
+func simulateBuyAndHoldBenchmark(bars []marketBar, initialCash float64, feeRate float64, slippageRate float64) (float64, float64, float64) {
+	if len(bars) == 0 {
+		return initialCash, 0, 0
+	}
+
+	buyPrice := bars[0].Close * (1 + slippageRate)
+	shares := int(initialCash / (buyPrice * (1 + feeRate)))
+	if shares <= 0 {
+		return initialCash, 0, 0
+	}
+
+	buyFee := float64(shares) * buyPrice * feeRate
+	cash := initialCash - float64(shares)*buyPrice - buyFee
+	peakEquity := initialCash
+	maxDrawdown := 0.0
+
+	for _, bar := range bars {
+		equity := cash + float64(shares)*bar.Close
+		if equity > peakEquity {
+			peakEquity = equity
+		}
+		if peakEquity > 0 {
+			drawdown := (peakEquity - equity) / peakEquity
+			if drawdown > maxDrawdown {
+				maxDrawdown = drawdown
+			}
+		}
+	}
+
+	sellPrice := bars[len(bars)-1].Close * (1 - slippageRate)
+	sellFee := float64(shares) * sellPrice * feeRate
+	finalEquity := cash + float64(shares)*sellPrice - sellFee
+	return finalEquity, (finalEquity - initialCash) / initialCash, maxDrawdown
+}
+
+func annualizeReturn(growth float64, tradingDays int) float64 {
+	if growth <= 0 || tradingDays <= 0 {
+		return 0
+	}
+	return math.Pow(growth, 252.0/float64(tradingDays)) - 1
 }
 
 func printBacktestSummary(result backtestResult) {
 	fmt.Printf(
-		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nMax drawdown: %.2f%%\nTrades: %d\nWin rate: %.2f%%\n\n",
+		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nBenchmark drawdown: %.2f%%\nTrades: %d\nWin rate: %.2f%%\n\n",
 		result.Symbol,
 		result.FromDate,
 		result.ToDate,
@@ -502,7 +574,11 @@ func printBacktestSummary(result backtestResult) {
 		result.InitialCash,
 		result.FinalEquity,
 		result.TotalReturn*100,
+		result.AnnualizedReturn*100,
+		result.BenchmarkReturn*100,
+		result.ExcessReturn*100,
 		result.MaxDrawdown*100,
+		result.BenchmarkDrawdown*100,
 		result.TradeCount,
 		result.WinRate*100,
 	)
@@ -520,7 +596,7 @@ func writeBacktestReports(result backtestResult) error {
 	}
 
 	textContent := fmt.Sprintf(
-		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nMax drawdown: %.2f%%\nTrades: %d\nWin rate: %.2f%%\nFee bps: %.2f\nSlippage bps: %.2f\nTotal fees: %.2f\n\nTrade Log\n%s",
+		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark equity: %.2f\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nBenchmark drawdown: %.2f%%\nTrading days: %d\nTrades: %d\nWin rate: %.2f%%\nFee bps: %.2f\nSlippage bps: %.2f\nTotal fees: %.2f\n\nTrade Log\n%s",
 		result.Symbol,
 		result.FromDate,
 		result.ToDate,
@@ -528,7 +604,13 @@ func writeBacktestReports(result backtestResult) error {
 		result.InitialCash,
 		result.FinalEquity,
 		result.TotalReturn*100,
+		result.AnnualizedReturn*100,
+		result.BenchmarkEquity,
+		result.BenchmarkReturn*100,
+		result.ExcessReturn*100,
 		result.MaxDrawdown*100,
+		result.BenchmarkDrawdown*100,
+		result.TradingDays,
 		result.TradeCount,
 		result.WinRate*100,
 		result.FeeBps,
@@ -581,7 +663,13 @@ func writeBacktestReports(result backtestResult) error {
         <div>Initial cash: %.2f</div>
         <div>Final equity: %.2f</div>
         <div>Total return: %.2f%%</div>
+        <div>Annualized return: %.2f%%</div>
+        <div>Benchmark equity: %.2f</div>
+        <div>Benchmark return: %.2f%%</div>
+        <div>Excess return: %.2f%%</div>
         <div>Max drawdown: %.2f%%</div>
+        <div>Benchmark drawdown: %.2f%%</div>
+        <div>Trading days: %d</div>
         <div>Trades: %d</div>
         <div>Win rate: %.2f%%</div>
         <div>Fee bps: %.2f</div>
@@ -606,7 +694,13 @@ func writeBacktestReports(result backtestResult) error {
 		result.InitialCash,
 		result.FinalEquity,
 		result.TotalReturn*100,
+		result.AnnualizedReturn*100,
+		result.BenchmarkEquity,
+		result.BenchmarkReturn*100,
+		result.ExcessReturn*100,
 		result.MaxDrawdown*100,
+		result.BenchmarkDrawdown*100,
+		result.TradingDays,
 		result.TradeCount,
 		result.WinRate*100,
 		result.FeeBps,
@@ -628,6 +722,7 @@ func writeBacktestReports(result backtestResult) error {
 func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) error {
 	textPath := filepath.Join(reportsDir, "backtest_scan.txt")
 	htmlPath := filepath.Join(reportsDir, "backtest_scan.html")
+	csvPath := filepath.Join(reportsDir, "backtest_scan.csv")
 
 	var textBuilder strings.Builder
 	fmt.Fprintf(&textBuilder, "Batch Backtest %s -> %s\nInitial cash: %.2f\nFee bps: %.2f\nSlippage bps: %.2f\n\n", fromDate, toDate, initialCash, feeBps, slippageBps)
@@ -638,6 +733,9 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 		}
 		fmt.Fprintf(&textBuilder, "%d. %s\n", i+1, nameLine)
 		fmt.Fprintf(&textBuilder, "   Return: %.2f%%\n", result.TotalReturn*100)
+		fmt.Fprintf(&textBuilder, "   Annualized: %.2f%%\n", result.AnnualizedReturn*100)
+		fmt.Fprintf(&textBuilder, "   Benchmark: %.2f%%\n", result.BenchmarkReturn*100)
+		fmt.Fprintf(&textBuilder, "   Excess: %.2f%%\n", result.ExcessReturn*100)
 		fmt.Fprintf(&textBuilder, "   Max drawdown: %.2f%%\n", result.MaxDrawdown*100)
 		fmt.Fprintf(&textBuilder, "   Trades: %d\n", result.TradeCount)
 		fmt.Fprintf(&textBuilder, "   Win rate: %.2f%%\n\n", result.WinRate*100)
@@ -649,11 +747,14 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%.2f%%</td><td>%.2f%%</td><td>%d</td><td>%.2f%%</td><td>%.2f</td></tr>`,
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%d</td><td>%.2f%%</td><td>%.2f</td></tr>`,
 			i+1,
 			html.EscapeString(result.Symbol),
 			html.EscapeString(name),
 			result.TotalReturn*100,
+			result.AnnualizedReturn*100,
+			result.BenchmarkReturn*100,
+			result.ExcessReturn*100,
 			result.MaxDrawdown*100,
 			result.TradeCount,
 			result.WinRate*100,
@@ -690,7 +791,7 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
       </div>
       <table>
         <thead>
-          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Return</th><th>Max DD</th><th>Trades</th><th>Win Rate</th><th>Final Equity</th></tr>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Return</th><th>Annualized</th><th>Benchmark</th><th>Excess</th><th>Max DD</th><th>Trades</th><th>Win Rate</th><th>Final Equity</th></tr>
         </thead>
         <tbody>%s</tbody>
       </table>
@@ -699,10 +800,42 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 </body>
 </html>`, html.EscapeString(fromDate), html.EscapeString(toDate), initialCash, feeBps, slippageBps, rows.String())
 
+	csvRows := [][]string{{
+		"symbol", "name", "from_date", "to_date", "mode", "initial_cash", "final_equity", "total_return",
+		"annualized_return", "benchmark_return", "benchmark_equity", "excess_return", "max_drawdown",
+		"benchmark_drawdown", "trade_count", "win_rate", "fee_bps", "slippage_bps", "total_fees",
+	}}
+	for _, result := range results {
+		csvRows = append(csvRows, []string{
+			result.Symbol,
+			result.Name,
+			result.FromDate,
+			result.ToDate,
+			result.Mode,
+			fmt.Sprintf("%.2f", result.InitialCash),
+			fmt.Sprintf("%.2f", result.FinalEquity),
+			fmt.Sprintf("%.8f", result.TotalReturn),
+			fmt.Sprintf("%.8f", result.AnnualizedReturn),
+			fmt.Sprintf("%.8f", result.BenchmarkReturn),
+			fmt.Sprintf("%.2f", result.BenchmarkEquity),
+			fmt.Sprintf("%.8f", result.ExcessReturn),
+			fmt.Sprintf("%.8f", result.MaxDrawdown),
+			fmt.Sprintf("%.8f", result.BenchmarkDrawdown),
+			strconv.Itoa(result.TradeCount),
+			fmt.Sprintf("%.8f", result.WinRate),
+			fmt.Sprintf("%.2f", result.FeeBps),
+			fmt.Sprintf("%.2f", result.SlippageBps),
+			fmt.Sprintf("%.2f", result.TotalFees),
+		})
+	}
+
 	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
 		return err
 	}
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	if err := writeCSVFile(csvPath, csvRows); err != nil {
 		return err
 	}
 	return nil
@@ -738,6 +871,102 @@ func buildEquityCurveSVG(curve []backtestTrade) string {
 
 	return fmt.Sprintf(`<svg viewBox="0 0 %.0f %.0f" width="100%%" height="240" role="img" aria-label="Equity curve"><rect x="0" y="0" width="100%%" height="100%%" fill="#f7f1e7"/><polyline fill="none" stroke="#0f766e" stroke-width="3" points="%s"/></svg>`,
 		width, height, strings.Join(points, " "))
+}
+
+func writeCSVFile(path string, rows [][]string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	if err := writer.WriteAll(rows); err != nil {
+		return err
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]backtestResult{}, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < 2 {
+		return map[string]backtestResult{}, nil
+	}
+
+	header := make(map[string]int)
+	for i, col := range rows[0] {
+		header[strings.TrimSpace(col)] = i
+	}
+
+	parse := func(row []string, name string) float64 {
+		idx, ok := header[name]
+		if !ok || idx >= len(row) {
+			return 0
+		}
+		value, err := strconv.ParseFloat(strings.TrimSpace(row[idx]), 64)
+		if err != nil {
+			return 0
+		}
+		return value
+	}
+	get := func(row []string, name string) string {
+		idx, ok := header[name]
+		if !ok || idx >= len(row) {
+			return ""
+		}
+		return strings.TrimSpace(row[idx])
+	}
+
+	results := make(map[string]backtestResult, len(rows)-1)
+	for _, row := range rows[1:] {
+		symbol := get(row, "symbol")
+		if symbol == "" {
+			continue
+		}
+		tradeCount, _ := strconv.Atoi(get(row, "trade_count"))
+		results[symbol] = backtestResult{
+			Symbol:           symbol,
+			Name:             get(row, "name"),
+			FromDate:         get(row, "from_date"),
+			ToDate:           get(row, "to_date"),
+			Mode:             get(row, "mode"),
+			TotalReturn:      parse(row, "total_return"),
+			AnnualizedReturn: parse(row, "annualized_return"),
+			BenchmarkReturn:  parse(row, "benchmark_return"),
+			ExcessReturn:     parse(row, "excess_return"),
+			MaxDrawdown:      parse(row, "max_drawdown"),
+			WinRate:          parse(row, "win_rate"),
+			TradeCount:       tradeCount,
+		}
+	}
+	return results, nil
+}
+
+func applyBacktestMetrics(candidate *scanCandidate, metrics backtestResult) {
+	candidate.HasBacktest = true
+	candidate.BacktestMode = metrics.Mode
+	candidate.BacktestFrom = metrics.FromDate
+	candidate.BacktestTo = metrics.ToDate
+	candidate.BacktestReturn = metrics.TotalReturn
+	candidate.BacktestAnnualized = metrics.AnnualizedReturn
+	candidate.BacktestBenchmark = metrics.BenchmarkReturn
+	candidate.BacktestExcess = metrics.ExcessReturn
+	candidate.BacktestDrawdown = metrics.MaxDrawdown
+	candidate.BacktestWinRate = metrics.WinRate
+	candidate.BacktestTrades = metrics.TradeCount
 }
 
 func max(a int, b int) int {
@@ -1920,21 +2149,21 @@ func writeAShareScanReports(candidates []scanCandidate) error {
       <h2>建议关注</h2>
       <table>
         <thead>
-          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Backtest</th><th>Plan</th></tr>
         </thead>
         <tbody>%s</tbody>
       </table>
       <h2>观望</h2>
       <table>
         <thead>
-          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Backtest</th><th>Plan</th></tr>
         </thead>
         <tbody>%s</tbody>
       </table>
       <h2>回避</h2>
       <table>
         <thead>
-          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Backtest</th><th>Plan</th></tr>
         </thead>
         <tbody>%s</tbody>
       </table>
@@ -1973,6 +2202,14 @@ func buildFocusText(candidates []scanCandidate) string {
 		fmt.Fprintf(&builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(&builder, "   Score: %.4f\n", candidate.Score)
 		fmt.Fprintf(&builder, "   Close: %.2f\n", candidate.ClosePrice)
+		if candidate.HasBacktest {
+			fmt.Fprintf(&builder, "   Backtest: Return %.2f%% | Annualized %.2f%% | Benchmark %.2f%% | Excess %.2f%%\n",
+				candidate.BacktestReturn*100,
+				candidate.BacktestAnnualized*100,
+				candidate.BacktestBenchmark*100,
+				candidate.BacktestExcess*100,
+			)
+		}
 		fmt.Fprintf(&builder, "   Reason: %s\n", candidate.Reason)
 		fmt.Fprintf(&builder, "   Trigger: %s\n", candidate.Trigger)
 		fmt.Fprintf(&builder, "   Plan: %s\n\n", candidate.Plan)
@@ -2001,13 +2238,13 @@ func buildFocusHTML(candidates []scanCandidate) string {
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>A-Share Focus List</h1>
-      <table>
-        <thead>
-          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Plan</th></tr>
-        </thead>
-        <tbody>%s</tbody>
-      </table>
+	      <h1>A-Share Focus List</h1>
+	      <table>
+	        <thead>
+	          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Action</th><th>Score</th><th>Avg Volume</th><th>Short MA</th><th>Long MA</th><th>Close</th><th>Reason / Trigger</th><th>Backtest</th><th>Plan</th></tr>
+	        </thead>
+	        <tbody>%s</tbody>
+	      </table>
     </div>
   </div>
 </body>
@@ -2044,6 +2281,19 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Close: %.2f\n", candidate.ClosePrice)
 		fmt.Fprintf(builder, "   Reason: %s\n", candidate.Reason)
 		fmt.Fprintf(builder, "   Trigger: %s (%.2f)\n", candidate.Trigger, candidate.TriggerPrice)
+		if candidate.HasBacktest {
+			fmt.Fprintf(builder, "   Backtest: %s -> %s | Return %.2f%% | Annualized %.2f%% | Benchmark %.2f%% | Excess %.2f%% | Max DD %.2f%% | Win rate %.2f%% | Trades %d\n",
+				candidate.BacktestFrom,
+				candidate.BacktestTo,
+				candidate.BacktestReturn*100,
+				candidate.BacktestAnnualized*100,
+				candidate.BacktestBenchmark*100,
+				candidate.BacktestExcess*100,
+				candidate.BacktestDrawdown*100,
+				candidate.BacktestWinRate*100,
+				candidate.BacktestTrades,
+			)
+		}
 		if len(candidate.AvoidTags) > 0 {
 			fmt.Fprintf(builder, "   Avoid Tags: %s\n", strings.Join(candidate.AvoidTags, ", "))
 		}
@@ -2053,7 +2303,7 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 
 func buildBucketRows(candidates []scanCandidate) string {
 	if len(candidates) == 0 {
-		return `<tr><td colspan="11">No candidates</td></tr>`
+		return `<tr><td colspan="12">No candidates</td></tr>`
 	}
 
 	var rows strings.Builder
@@ -2066,7 +2316,21 @@ func buildBucketRows(candidates []scanCandidate) string {
 		if len(candidate.AvoidTags) > 0 {
 			avoidTags = "<br><small>Tags: " + html.EscapeString(strings.Join(candidate.AvoidTags, ", ")) + "</small>"
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small></td><td>%s</td><td>%.4f</td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small>%s</td><td>%s</td></tr>`,
+		backtestCell := `<small>No backtest snapshot</small>`
+		if candidate.HasBacktest {
+			backtestCell = fmt.Sprintf(`<small>%s to %s</small><br>Return %.2f%%<br>Annualized %.2f%%<br>Benchmark %.2f%%<br>Excess %.2f%%<br>Max DD %.2f%%<br>Win rate %.2f%%<br>Trades %d`,
+				html.EscapeString(candidate.BacktestFrom),
+				html.EscapeString(candidate.BacktestTo),
+				candidate.BacktestReturn*100,
+				candidate.BacktestAnnualized*100,
+				candidate.BacktestBenchmark*100,
+				candidate.BacktestExcess*100,
+				candidate.BacktestDrawdown*100,
+				candidate.BacktestWinRate*100,
+				candidate.BacktestTrades,
+			)
+		}
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small></td><td>%s</td><td>%.4f</td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small>%s</td><td>%s</td><td>%s</td></tr>`,
 			i+1,
 			html.EscapeString(candidate.Symbol),
 			html.EscapeString(candidate.Name),
@@ -2081,6 +2345,7 @@ func buildBucketRows(candidates []scanCandidate) string {
 			html.EscapeString(candidate.Trigger),
 			candidate.TriggerPrice,
 			avoidTags,
+			backtestCell,
 			html.EscapeString(candidate.Plan),
 		)
 	}
