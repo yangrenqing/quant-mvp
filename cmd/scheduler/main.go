@@ -24,7 +24,7 @@ const configPath = "configs/config.yaml"
 const reportsDir = "reports"
 const aShareUniversePath = "data/a_share_universe.csv"
 const cacheDir = "data/cache"
-const aShareBenchmarkSymbol = "510300"
+const aShareBenchmarkSymbol = "000300.SH"
 
 type marketKind string
 
@@ -201,6 +201,7 @@ type portfolioBacktestResult struct {
 	TradingDays      int
 	Positions        int
 	Snapshots        []portfolioSnapshot
+	BenchmarkCurve   []backtestTrade
 	LatestSelection  []scanCandidate
 	CurrentHoldings  []portfolioHolding
 	ExposureLevel    float64
@@ -459,7 +460,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 		return portfolioBacktestResult{}, errors.New("no market data available for portfolio backtest")
 	}
 	backtestSnapshot, _ := loadBacktestSnapshot(filepath.Join(reportsDir, "backtest_scan.csv"))
-	benchmarkBars, _, _, benchmarkErr := loadSymbolBars(aShareBenchmarkSymbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+	benchmarkBars, benchmarkErr := loadAShareBenchmarkBars()
 	if benchmarkErr != nil || len(benchmarkBars) < strategy.LongWindow {
 		benchmarkBars = nil
 	}
@@ -753,8 +754,15 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 	finalEquity := snapshots[len(snapshots)-1].Equity
 	currentHoldings := snapshots[len(snapshots)-1].Holdings
 	benchmarkReturn := 0.0
-	if len(latestSelection) > 0 {
-		benchmarkReturn = averageBenchmarkReturn(latestSelection, fromDate, toDate, series, initialCash, feeRate, slippageRate)
+	benchmarkCurve := make([]backtestTrade, 0)
+	if len(benchmarkBars) > 0 {
+		benchmarkCurve = buildBenchmarkCurve(benchmarkBars, fromDate, toDate, initialCash, feeRate, slippageRate)
+	}
+	if len(benchmarkCurve) == 0 {
+		benchmarkCurve = buildUniverseBenchmarkCurve(series, dates, initialCash)
+	}
+	if len(benchmarkCurve) > 0 {
+		benchmarkReturn = (benchmarkCurve[len(benchmarkCurve)-1].Equity - initialCash) / initialCash
 	}
 
 	return portfolioBacktestResult{
@@ -774,6 +782,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 		TradingDays:      len(snapshots),
 		Positions:        topN,
 		Snapshots:        snapshots,
+		BenchmarkCurve:   benchmarkCurve,
 		LatestSelection:  latestSelection,
 		CurrentHoldings:  currentHoldings,
 		ExposureLevel:    lastExposureLevel,
@@ -1023,6 +1032,79 @@ func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate s
 		return 0
 	}
 	return average(values)
+}
+
+func buildBenchmarkCurve(bars []marketBar, fromDate string, toDate string, initialCash float64, feeRate float64, slippageRate float64) []backtestTrade {
+	filtered := make([]marketBar, 0, len(bars))
+	for _, bar := range bars {
+		if bar.Date >= fromDate && bar.Date <= toDate {
+			filtered = append(filtered, bar)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	buyPrice := filtered[0].Close * (1 + slippageRate)
+	shares := int(initialCash / (buyPrice * (1 + feeRate)))
+	if shares <= 0 {
+		return nil
+	}
+	buyFee := float64(shares) * buyPrice * feeRate
+	cash := initialCash - float64(shares)*buyPrice - buyFee
+
+	curve := make([]backtestTrade, 0, len(filtered))
+	for _, bar := range filtered {
+		equity := cash + float64(shares)*bar.Close
+		curve = append(curve, backtestTrade{
+			Date:   bar.Date,
+			Price:  bar.Close,
+			Shares: shares,
+			Cash:   cash,
+			Equity: equity,
+		})
+	}
+	return curve
+}
+
+func buildUniverseBenchmarkCurve(series []marketSeries, dates []string, initialCash float64) []backtestTrade {
+	if len(series) == 0 || len(dates) == 0 {
+		return nil
+	}
+	barBySymbolDate := make(map[string]map[string]marketBar, len(series))
+	for _, item := range series {
+		dateMap := make(map[string]marketBar, len(item.bars))
+		for _, bar := range item.bars {
+			dateMap[bar.Date] = bar
+		}
+		barBySymbolDate[item.meta.Symbol] = dateMap
+	}
+
+	equity := initialCash
+	curve := make([]backtestTrade, 0, len(dates))
+	for i, date := range dates {
+		if i > 0 {
+			totalReturn := 0.0
+			count := 0
+			for _, item := range series {
+				prevBar, okPrev := barBySymbolDate[item.meta.Symbol][dates[i-1]]
+				currBar, okCurr := barBySymbolDate[item.meta.Symbol][date]
+				if !okPrev || !okCurr || prevBar.Close <= 0 {
+					continue
+				}
+				totalReturn += currBar.Close/prevBar.Close - 1
+				count++
+			}
+			if count > 0 {
+				equity *= 1 + totalReturn/float64(count)
+			}
+		}
+		curve = append(curve, backtestTrade{
+			Date:   date,
+			Equity: equity,
+		})
+	}
+	return curve
 }
 
 func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate, minAverageTurnover float64, maxVolatility float64, overheatThreshold float64, minTrendGap float64) bool {
@@ -1491,6 +1573,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		curve = append(curve, backtestTrade{Date: snapshot.Date, Equity: snapshot.Equity})
 	}
 	svg := buildEquityCurveSVG(curve)
+	comparisonSVG := buildComparisonCurveSVG(result.Snapshots, result.BenchmarkCurve)
 
 	lastHoldings := "None"
 	if len(result.Snapshots) > 0 && len(result.Snapshots[len(result.Snapshots)-1].Holdings) > 0 {
@@ -1576,6 +1659,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
         <div>Current holdings: %s</div>
       </div>
       <div style="margin-top:18px">%s</div>
+      <div style="margin-top:18px">%s</div>
       <table>
         <thead>
           <tr><th>#</th><th>Symbol</th><th>Name</th><th>Score</th><th>Close</th></tr>
@@ -1603,6 +1687,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		result.TradingDays,
 		html.EscapeString(lastHoldings),
 		svg,
+		comparisonSVG,
 		selectionRows.String(),
 	)
 
@@ -1656,6 +1741,71 @@ func buildEquityCurveSVG(curve []backtestTrade) string {
 
 	return fmt.Sprintf(`<svg viewBox="0 0 %.0f %.0f" width="100%%" height="240" role="img" aria-label="Equity curve"><rect x="0" y="0" width="100%%" height="100%%" fill="#f7f1e7"/><polyline fill="none" stroke="#0f766e" stroke-width="3" points="%s"/></svg>`,
 		width, height, strings.Join(points, " "))
+}
+
+func buildComparisonCurveSVG(portfolio []portfolioSnapshot, benchmark []backtestTrade) string {
+	if len(portfolio) == 0 || len(benchmark) == 0 {
+		return ""
+	}
+
+	benchmarkByDate := make(map[string]float64, len(benchmark))
+	for _, point := range benchmark {
+		benchmarkByDate[point.Date] = point.Equity
+	}
+
+	type comparePoint struct {
+		date      string
+		portfolio float64
+		benchmark float64
+	}
+	points := make([]comparePoint, 0, len(portfolio))
+	for _, snapshot := range portfolio {
+		if benchmarkEquity, ok := benchmarkByDate[snapshot.Date]; ok {
+			points = append(points, comparePoint{
+				date:      snapshot.Date,
+				portfolio: snapshot.Equity,
+				benchmark: benchmarkEquity,
+			})
+		}
+	}
+	if len(points) == 0 {
+		return ""
+	}
+
+	minValue := points[0].portfolio
+	maxValue := points[0].portfolio
+	for _, point := range points {
+		if point.portfolio < minValue {
+			minValue = point.portfolio
+		}
+		if point.benchmark < minValue {
+			minValue = point.benchmark
+		}
+		if point.portfolio > maxValue {
+			maxValue = point.portfolio
+		}
+		if point.benchmark > maxValue {
+			maxValue = point.benchmark
+		}
+	}
+	if maxValue == minValue {
+		maxValue = minValue + 1
+	}
+
+	width := 900.0
+	height := 260.0
+	portfolioLine := make([]string, 0, len(points))
+	benchmarkLine := make([]string, 0, len(points))
+	for i, point := range points {
+		x := (float64(i) / float64(max(1, len(points)-1))) * width
+		portfolioY := height - ((point.portfolio-minValue)/(maxValue-minValue))*height
+		benchmarkY := height - ((point.benchmark-minValue)/(maxValue-minValue))*height
+		portfolioLine = append(portfolioLine, fmt.Sprintf("%.2f,%.2f", x, portfolioY))
+		benchmarkLine = append(benchmarkLine, fmt.Sprintf("%.2f,%.2f", x, benchmarkY))
+	}
+
+	return fmt.Sprintf(`<svg viewBox="0 0 %.0f %.0f" width="100%%" height="260" role="img" aria-label="Portfolio versus benchmark curve"><rect x="0" y="0" width="100%%" height="100%%" fill="#f7f1e7"/><polyline fill="none" stroke="#0f766e" stroke-width="3" points="%s"/><polyline fill="none" stroke="#b45309" stroke-width="2.5" stroke-dasharray="8 6" points="%s"/><text x="18" y="24" fill="#0f766e" font-size="14">Portfolio</text><text x="110" y="24" fill="#b45309" font-size="14">Benchmark</text></svg>`,
+		width, height, strings.Join(portfolioLine, " "), strings.Join(benchmarkLine, " "))
 }
 
 func writeCSVFile(path string, rows [][]string) error {
@@ -2719,7 +2869,16 @@ func loadBarsFromBaoStock(symbol string) ([]marketBar, error) {
 	}
 	parts := strings.SplitN(normalized, ".", 2)
 	baoCode := strings.ToLower(parts[1]) + "." + parts[0]
+	return loadBarsFromBaoStockCode(baoCode)
+}
 
+func loadAShareBenchmarkBars() ([]marketBar, error) {
+	return loadCachedProviderBars("baostock", aShareBenchmarkSymbol, func() ([]marketBar, error) {
+		return loadBarsFromBaoStockCode("sh.000300")
+	})
+}
+
+func loadBarsFromBaoStockCode(baoCode string) ([]marketBar, error) {
 	script := fmt.Sprintf(`import baostock as bs
 lg = bs.login()
 if lg.error_code != '0':
@@ -3416,6 +3575,14 @@ func normalizeAShareSymbol(symbol string) (string, error) {
 		strings.HasPrefix(normalized, "601"),
 		strings.HasPrefix(normalized, "603"),
 		strings.HasPrefix(normalized, "605"),
+		strings.HasPrefix(normalized, "510"),
+		strings.HasPrefix(normalized, "511"),
+		strings.HasPrefix(normalized, "512"),
+		strings.HasPrefix(normalized, "513"),
+		strings.HasPrefix(normalized, "515"),
+		strings.HasPrefix(normalized, "516"),
+		strings.HasPrefix(normalized, "518"),
+		strings.HasPrefix(normalized, "588"),
 		strings.HasPrefix(normalized, "688"),
 		strings.HasPrefix(normalized, "689"):
 		return normalized + ".SH", nil
@@ -3423,6 +3590,7 @@ func normalizeAShareSymbol(symbol string) (string, error) {
 		strings.HasPrefix(normalized, "001"),
 		strings.HasPrefix(normalized, "002"),
 		strings.HasPrefix(normalized, "003"),
+		strings.HasPrefix(normalized, "159"),
 		strings.HasPrefix(normalized, "300"),
 		strings.HasPrefix(normalized, "301"):
 		return normalized + ".SZ", nil
