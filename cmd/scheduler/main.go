@@ -24,6 +24,7 @@ const configPath = "configs/config.yaml"
 const reportsDir = "reports"
 const aShareUniversePath = "data/a_share_universe.csv"
 const cacheDir = "data/cache"
+const aShareBenchmarkSymbol = "510300"
 
 type marketKind string
 
@@ -173,6 +174,7 @@ type portfolioHolding struct {
 	Symbol string
 	Name   string
 	Shares int
+	Entry  float64
 }
 
 type portfolioSnapshot struct {
@@ -201,6 +203,8 @@ type portfolioBacktestResult struct {
 	Snapshots        []portfolioSnapshot
 	LatestSelection  []scanCandidate
 	CurrentHoldings  []portfolioHolding
+	ExposureLevel    float64
+	RegimeLabel      string
 }
 
 type marketSeries struct {
@@ -454,6 +458,11 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 	if len(series) == 0 {
 		return portfolioBacktestResult{}, errors.New("no market data available for portfolio backtest")
 	}
+	backtestSnapshot, _ := loadBacktestSnapshot(filepath.Join(reportsDir, "backtest_scan.csv"))
+	benchmarkBars, _, _, benchmarkErr := loadSymbolBars(aShareBenchmarkSymbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+	if benchmarkErr != nil || len(benchmarkBars) < strategy.LongWindow {
+		benchmarkBars = nil
+	}
 
 	dates := tradingDatesInRange(series[0].bars, fromDate, toDate)
 	if len(dates) == 0 {
@@ -473,13 +482,26 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 	slippageRate := slippageBps / 10000
 	cash := initialCash
 	holdings := map[string]int{}
+	entryPrices := map[string]float64{}
+	holdingPeaks := map[string]float64{}
+	cooldownUntil := map[string]string{}
 	snapshots := make([]portfolioSnapshot, 0, len(dates))
 	peakEquity := initialCash
 	maxDrawdown := 0.0
 	rebalanceCount := 0
 	latestSelection := make([]scanCandidate, 0)
+	lastRegimeLabel := "neutral"
+	lastExposureLevel := 1.0
 	const rebalanceInterval = 5
 	const weightDriftThreshold = 0.20
+	const minHoldings = 2
+	const maxPositionWeight = 0.45
+	const maxCashShare = 0.20
+	const maxVolatility = 0.18
+	const minAverageTurnover = 30_000_000.0
+	const overheatThreshold = 0.12
+	const maxHoldingDrawdown = 0.15
+	const minTrendGap = 0.02
 
 	for dayIdx, date := range dates {
 		candidates := make([]scanCandidate, 0, len(series))
@@ -492,17 +514,34 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 			if err != nil {
 				continue
 			}
-			if candidate.Score > 0 && candidate.Bucket != "回避" {
+			if metrics, ok := backtestSnapshot[candidate.Symbol]; ok {
+				applyBacktestMetrics(&candidate, metrics)
+			}
+			if cooldownUntil[item.meta.Symbol] != "" && date <= cooldownUntil[item.meta.Symbol] {
+				continue
+			}
+			if candidate.Score > 0 && candidate.Bucket != "回避" && passPortfolioCandidateFilters(history, candidate, minAverageTurnover, maxVolatility, overheatThreshold, minTrendGap) {
 				candidates = append(candidates, candidate)
 			}
 		}
 
-		sort.Slice(candidates, func(i, j int) bool {
-			return candidates[i].Score > candidates[j].Score
-		})
-		if len(candidates) > topN {
-			candidates = candidates[:topN]
+		relativeStrengthFloor := candidateMedianScore(candidates)
+		regimeLabel, targetExposure := benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), strategy.LongWindow)
+		lastRegimeLabel = regimeLabel
+		lastExposureLevel = targetExposure
+		if targetExposure > 0 {
+			filtered := make([]scanCandidate, 0, len(candidates))
+			for _, candidate := range candidates {
+				if candidate.Score >= relativeStrengthFloor {
+					filtered = append(filtered, candidate)
+				}
+			}
+			candidates = filtered
+		} else {
+			candidates = nil
 		}
+
+		candidates = selectPortfolioCandidates(candidates, topN, minHoldings)
 		if len(candidates) > 0 {
 			latestSelection = append([]scanCandidate(nil), candidates...)
 		}
@@ -531,17 +570,56 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 			if shares <= 0 {
 				continue
 			}
-			if _, keep := targetSet[symbol]; keep {
-				continue
-			}
 			bar, ok := barBySymbolDate[symbol][date]
 			if !ok {
+				continue
+			}
+			if bar.Close > holdingPeaks[symbol] {
+				holdingPeaks[symbol] = bar.Close
+			}
+			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
+				execPrice := bar.Close * (1 - slippageRate)
+				fee := float64(shares) * execPrice * feeRate
+				cash += float64(shares)*execPrice - fee
+				holdings[symbol] = 0
+				delete(entryPrices, symbol)
+				delete(holdingPeaks, symbol)
+				cooldownUntil[symbol] = portfolioCooldownDate(date, 5)
+				rebalanceCount++
+				continue
+			}
+			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-maxHoldingDrawdown) {
+				execPrice := bar.Close * (1 - slippageRate)
+				fee := float64(shares) * execPrice * feeRate
+				cash += float64(shares)*execPrice - fee
+				holdings[symbol] = 0
+				delete(entryPrices, symbol)
+				delete(holdingPeaks, symbol)
+				cooldownUntil[symbol] = portfolioCooldownDate(date, 5)
+				rebalanceCount++
+				continue
+			}
+			if candidate, keep := targetSet[symbol]; keep && candidate.Action == "SELL" {
+				execPrice := bar.Close * (1 - slippageRate)
+				fee := float64(shares) * execPrice * feeRate
+				cash += float64(shares)*execPrice - fee
+				holdings[symbol] = 0
+				delete(entryPrices, symbol)
+				delete(holdingPeaks, symbol)
+				cooldownUntil[symbol] = portfolioCooldownDate(date, 4)
+				rebalanceCount++
+				continue
+			}
+			if _, keep := targetSet[symbol]; keep {
 				continue
 			}
 			execPrice := bar.Close * (1 - slippageRate)
 			fee := float64(shares) * execPrice * feeRate
 			cash += float64(shares)*execPrice - fee
 			holdings[symbol] = 0
+			delete(entryPrices, symbol)
+			delete(holdingPeaks, symbol)
+			cooldownUntil[symbol] = portfolioCooldownDate(date, 3)
 			rebalanceCount++
 		}
 
@@ -555,7 +633,20 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 					targetValue += float64(shares) * bar.Close
 				}
 			}
-			slotValue := targetValue / float64(len(candidates))
+			targetSlots := len(candidates)
+			if targetSlots < minHoldings {
+				targetSlots = minHoldings
+			}
+			effectiveCashShare := maxCashShare + (1 - targetExposure)
+			if effectiveCashShare > 0.85 {
+				effectiveCashShare = 0.85
+			}
+			deployableCapital := targetValue * (1 - effectiveCashShare)
+			slotValue := deployableCapital / float64(targetSlots)
+			maxSlotValue := targetValue * maxPositionWeight
+			if slotValue > maxSlotValue {
+				slotValue = maxSlotValue
+			}
 
 			for _, candidate := range candidates {
 				bar, ok := barBySymbolDate[candidate.Symbol][date]
@@ -587,6 +678,10 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 					fee := float64(sellShares) * execPrice * feeRate
 					cash += float64(sellShares)*execPrice - fee
 					holdings[candidate.Symbol] = currentShares - sellShares
+					if holdings[candidate.Symbol] <= 0 {
+						delete(entryPrices, candidate.Symbol)
+						delete(holdingPeaks, candidate.Symbol)
+					}
 					rebalanceCount++
 					continue
 				}
@@ -605,6 +700,10 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 				}
 				cash -= cost + fee
 				holdings[candidate.Symbol] = currentShares + diff
+				if currentShares == 0 {
+					entryPrices[candidate.Symbol] = execPrice
+					holdingPeaks[candidate.Symbol] = bar.Close
+				}
 				rebalanceCount++
 			}
 		}
@@ -625,6 +724,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 				Symbol: item.meta.Symbol,
 				Name:   item.meta.Name,
 				Shares: shares,
+				Entry:  entryPrices[item.meta.Symbol],
 			})
 		}
 		sort.Slice(holdingsList, func(i, j int) bool { return holdingsList[i].Symbol < holdingsList[j].Symbol })
@@ -676,6 +776,8 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate str
 		Snapshots:        snapshots,
 		LatestSelection:  latestSelection,
 		CurrentHoldings:  currentHoldings,
+		ExposureLevel:    lastExposureLevel,
+		RegimeLabel:      lastRegimeLabel,
 	}, nil
 }
 
@@ -921,6 +1023,156 @@ func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate s
 		return 0
 	}
 	return average(values)
+}
+
+func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate, minAverageTurnover float64, maxVolatility float64, overheatThreshold float64, minTrendGap float64) bool {
+	if len(history) < 5 {
+		return false
+	}
+
+	avgTurnover := 0.0
+	returns := make([]float64, 0, len(history)-1)
+	for i := 0; i < len(history); i++ {
+		avgTurnover += history[i].Close * history[i].Volume
+		if i == 0 || history[i-1].Close <= 0 {
+			continue
+		}
+		returns = append(returns, history[i].Close/history[i-1].Close-1)
+	}
+	avgTurnover /= float64(len(history))
+	if avgTurnover < minAverageTurnover {
+		return false
+	}
+
+	volatility := standardDeviation(returns)
+	if volatility > maxVolatility {
+		return false
+	}
+	if candidate.StructureScore > overheatThreshold {
+		return false
+	}
+	if candidate.TrendScore < minTrendGap {
+		return false
+	}
+	return true
+}
+
+func portfolioCooldownDate(date string, days int) string {
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return date
+	}
+	return parsed.AddDate(0, 0, days).Format("2006-01-02")
+}
+
+func standardDeviation(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	mean := average(values)
+	var sum float64
+	for _, value := range values {
+		diff := value - mean
+		sum += diff * diff
+	}
+	return math.Sqrt(sum / float64(len(values)))
+}
+
+func candidateMedianScore(candidates []scanCandidate) float64 {
+	if len(candidates) == 0 {
+		return 0
+	}
+
+	scores := make([]float64, 0, len(candidates))
+	for _, candidate := range candidates {
+		scores = append(scores, candidate.Score)
+	}
+	sort.Float64s(scores)
+	return scores[len(scores)/2]
+}
+
+func benchmarkMarketRegime(history []marketBar, longWindow int) (string, float64) {
+	if len(history) < longWindow {
+		return "cautious", 0.45
+	}
+
+	closes := make([]float64, 0, len(history))
+	for _, bar := range history {
+		closes = append(closes, bar.Close)
+	}
+	latest := history[len(history)-1]
+	shortWindow := min(5, longWindow)
+	shortMA := average(closes[len(closes)-shortWindow:])
+	longMA := average(closes[len(closes)-longWindow:])
+	peak := closes[0]
+	for _, closePrice := range closes {
+		if closePrice > peak {
+			peak = closePrice
+		}
+	}
+	drawdown := 0.0
+	if peak > 0 {
+		drawdown = (peak - latest.Close) / peak
+	}
+
+	if latest.Close < longMA || drawdown > 0.12 {
+		return "risk_off", 0
+	}
+	if latest.Close < shortMA || drawdown > 0.06 {
+		return "cautious", 0.45
+	}
+	return "risk_on", 1.0
+}
+
+func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings int) []scanCandidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		leftScore := portfolioSelectionScore(candidates[i])
+		rightScore := portfolioSelectionScore(candidates[j])
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+		return candidates[i].Score > candidates[j].Score
+	})
+
+	if topN > 0 && len(candidates) > topN {
+		candidates = candidates[:topN]
+	}
+
+	selected := make([]scanCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		// Prefer names with either strong standalone signal quality or
+		// acceptable historical validation.
+		if candidate.Score >= 0.05 || candidate.BacktestExcess >= 0 || candidate.BacktestReturn >= 0 {
+			selected = append(selected, candidate)
+		}
+	}
+	if len(selected) >= minHoldings {
+		return selected
+	}
+	if len(candidates) < minHoldings {
+		return candidates
+	}
+	return candidates[:minHoldings]
+}
+
+func portfolioSelectionScore(candidate scanCandidate) float64 {
+	score := candidate.Score
+	if candidate.HasBacktest {
+		score += candidate.BacktestExcess * 0.35
+		score += candidate.BacktestReturn * 0.15
+		score -= candidate.BacktestDrawdown * 0.20
+	}
+	if candidate.RiskPenalty > 0 {
+		score -= candidate.RiskPenalty
+	}
+	if candidate.Bucket == "观望" {
+		score -= 0.02
+	}
+	return score
 }
 
 func printBacktestSummary(result backtestResult) {
@@ -1202,11 +1454,13 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 
 func printPortfolioBacktestSummary(result portfolioBacktestResult) {
 	fmt.Printf(
-		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\n\n",
+		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nRegime: %s\nTarget exposure: %.0f%%\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\n\n",
 		result.FromDate,
 		result.ToDate,
 		result.Mode,
 		result.Positions,
+		result.RegimeLabel,
+		result.ExposureLevel*100,
 		result.InitialCash,
 		result.FinalEquity,
 		result.TotalReturn*100,
@@ -1248,11 +1502,13 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	}
 
 	textContent := fmt.Sprintf(
-		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\n\nLatest selection\n%s",
+		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nRegime: %s\nTarget exposure: %.0f%%\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\n\nLatest selection\n%s",
 		result.FromDate,
 		result.ToDate,
 		result.Mode,
 		result.Positions,
+		result.RegimeLabel,
+		result.ExposureLevel*100,
 		result.InitialCash,
 		result.FinalEquity,
 		result.TotalReturn*100,
@@ -1306,6 +1562,8 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
         <div>Range: %s to %s</div>
         <div>Mode: %s</div>
         <div>Positions: %d</div>
+        <div>Regime: %s</div>
+        <div>Target exposure: %.0f%%</div>
         <div>Initial cash: %.2f</div>
         <div>Final equity: %.2f</div>
         <div>Total return: %.2f%%</div>
@@ -1332,6 +1590,8 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		html.EscapeString(result.ToDate),
 		html.EscapeString(result.Mode),
 		result.Positions,
+		html.EscapeString(result.RegimeLabel),
+		result.ExposureLevel*100,
 		result.InitialCash,
 		result.FinalEquity,
 		result.TotalReturn*100,
@@ -1528,6 +1788,13 @@ func applyBacktestMetrics(candidate *scanCandidate, metrics backtestResult) {
 
 func max(a int, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a int, b int) int {
+	if a < b {
 		return a
 	}
 	return b
