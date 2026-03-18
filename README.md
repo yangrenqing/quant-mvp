@@ -46,3 +46,14 @@ Training outputs:
 - `reports/linear_model.json`
 - `reports/model_train.txt`
 - `reports/model_predictions.csv`
+
+Continuous learning workflow:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+python3 scripts/model_pipeline.py --from 2025-01-01 --to 2026-03-18 --label label_10d
+```
+
+Pipeline outputs:
+- `reports/model_pipeline_latest.txt`
+- `reports/model_registry.jsonl`
+- `reports/model_versions/<timestamp>/`
