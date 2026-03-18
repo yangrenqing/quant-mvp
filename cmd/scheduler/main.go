@@ -107,12 +107,49 @@ type scanCandidate struct {
 	Plan         string
 }
 
+type backtestTrade struct {
+	Date   string
+	Action string
+	Price  float64
+	Shares int
+	Fee    float64
+	Cash   float64
+	Equity float64
+	Reason string
+}
+
+type backtestResult struct {
+	Symbol      string
+	Name        string
+	FromDate    string
+	ToDate      string
+	InitialCash float64
+	FinalEquity float64
+	TotalReturn float64
+	MaxDrawdown float64
+	TradeCount  int
+	WinRate     float64
+	Mode        string
+	FeeBps      float64
+	SlippageBps float64
+	TotalFees   float64
+	Trades      []backtestTrade
+	EquityCurve []backtestTrade
+}
+
 func main() {
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 	symbolOverride := flag.String("symbol", "", "Override the configured symbol for this run")
 	once := flag.Bool("once", false, "Run the strategy once and exit")
 	scanAShare := flag.Bool("scan-a-share", false, "Scan the full A-share universe and generate a ranked report")
 	topN := flag.Int("top", 10, "Number of candidates to keep in the A-share scan report")
+	backtest := flag.Bool("backtest", false, "Run a single-symbol backtest")
+	backtestScan := flag.Bool("backtest-scan", false, "Run a backtest across the local A-share universe")
+	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
+	toDate := flag.String("to", "", "Backtest end date in YYYY-MM-DD")
+	initialCash := flag.Float64("cash", 100000, "Backtest initial cash")
+	feeBps := flag.Float64("fee-bps", 10, "Backtest transaction fee in basis points")
+	slippageBps := flag.Float64("slippage-bps", 5, "Backtest slippage in basis points")
 	flag.Parse()
 
 	cfg, err := loadConfig(configPath)
@@ -128,6 +165,37 @@ func main() {
 	}
 	if err := os.MkdirAll(reportsDir, 0o755); err != nil {
 		logger.Fatalf("ensure reports dir: %v", err)
+	}
+	if *backtest {
+		if strings.TrimSpace(cfg.Strategy.Symbol) == "" {
+			logger.Fatalf("backtest requires a symbol")
+		}
+		if *fromDate == "" || *toDate == "" {
+			logger.Fatalf("backtest requires --from and --to")
+		}
+		result, err := runBacktest(cfg.Strategy, cfg.Risk, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps)
+		if err != nil {
+			logger.Fatalf("backtest failed: %v", err)
+		}
+		if err := writeBacktestReports(result); err != nil {
+			logger.Fatalf("write backtest reports: %v", err)
+		}
+		printBacktestSummary(result)
+		return
+	}
+	if *backtestScan {
+		if *fromDate == "" || *toDate == "" {
+			logger.Fatalf("backtest scan requires --from and --to")
+		}
+		results, err := runBatchBacktest(cfg.Strategy, cfg.Risk, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps, *topN)
+		if err != nil {
+			logger.Fatalf("backtest scan failed: %v", err)
+		}
+		if err := writeBatchBacktestReports(results, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps); err != nil {
+			logger.Fatalf("write batch backtest reports: %v", err)
+		}
+		fmt.Printf("Batch backtest complete. %d results written to %s and %s\n\n", len(results), filepath.Join(reportsDir, "backtest_scan.txt"), filepath.Join(reportsDir, "backtest_scan.html"))
+		return
 	}
 	if *scanAShare {
 		if err := runAShareScan(cfg.Strategy, *topN); err != nil {
@@ -224,6 +292,459 @@ func runAShareScan(strategy strategyConfig, topN int) error {
 	fmt.Println()
 
 	return nil
+}
+
+func runBacktest(strategy strategyConfig, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
+	bars, dataSource, _, err := loadBars(strategy)
+	if err != nil {
+		return backtestResult{}, err
+	}
+	return simulateBacktest(strategy.Symbol, "", bars, modeFromDataSource(dataSource), strategy.ShortWindow, strategy.LongWindow, risk, fromDate, toDate, initialCash, feeBps, slippageBps)
+}
+
+func runBatchBacktest(strategy strategyConfig, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64, topN int) ([]backtestResult, error) {
+	symbols, err := loadAShareUniverse()
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]backtestResult, 0, len(symbols))
+	for _, symbol := range symbols {
+		bars, err := loadBarsFromBaoStock(symbol.Symbol)
+		mode := "live"
+		if err != nil {
+			bars, err = loadBarsFromTushare(symbol.Symbol, os.Getenv("TUSHARE_TOKEN"))
+			if err != nil {
+				continue
+			}
+		}
+
+		result, err := simulateBacktest(symbol.Symbol, symbol.Name, bars, mode, strategy.ShortWindow, strategy.LongWindow, risk, fromDate, toDate, initialCash, feeBps, slippageBps)
+		if err != nil {
+			continue
+		}
+		results = append(results, result)
+	}
+
+	if len(results) == 0 {
+		return nil, errors.New("no backtest results were generated")
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].TotalReturn != results[j].TotalReturn {
+			return results[i].TotalReturn > results[j].TotalReturn
+		}
+		return results[i].MaxDrawdown < results[j].MaxDrawdown
+	})
+
+	if topN > 0 && topN < len(results) {
+		results = results[:topN]
+	}
+	return results, nil
+}
+
+func simulateBacktest(symbol string, name string, bars []marketBar, mode string, shortWindow int, longWindow int, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
+
+	filtered := make([]marketBar, 0, len(bars))
+	for _, bar := range bars {
+		if bar.Date >= fromDate && bar.Date <= toDate {
+			filtered = append(filtered, bar)
+		}
+	}
+	if len(filtered) < longWindow {
+		return backtestResult{}, fmt.Errorf("not enough bars in backtest window: need %d, got %d", longWindow, len(filtered))
+	}
+
+	cash := initialCash
+	shares := 0
+	entryPrice := 0.0
+	trades := make([]backtestTrade, 0)
+	equityCurve := make([]backtestTrade, 0, len(filtered))
+	winningTrades := 0
+	completedTrades := 0
+	peakEquity := initialCash
+	maxDrawdown := 0.0
+	totalFees := 0.0
+	feeRate := feeBps / 10000
+	slippageRate := slippageBps / 10000
+
+	closes := make([]float64, 0, len(filtered))
+	for i, bar := range filtered {
+		closes = append(closes, bar.Close)
+		equity := cash + float64(shares)*bar.Close
+		if equity > peakEquity {
+			peakEquity = equity
+		}
+		drawdown := 0.0
+		if peakEquity > 0 {
+			drawdown = (peakEquity - equity) / peakEquity
+		}
+		if drawdown > maxDrawdown {
+			maxDrawdown = drawdown
+		}
+
+		equityCurve = append(equityCurve, backtestTrade{
+			Date:   bar.Date,
+			Action: "MARK",
+			Price:  bar.Close,
+			Shares: shares,
+			Cash:   cash,
+			Equity: equity,
+		})
+
+		if i+1 < longWindow {
+			continue
+		}
+
+		shortMA := average(closes[len(closes)-shortWindow:])
+		longMA := average(closes[len(closes)-longWindow:])
+		action := ""
+		reason := ""
+
+		if shares > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
+			action = "SELL"
+			reason = fmt.Sprintf("stop loss triggered at %.2f%%", risk.StopLossPct*100)
+		} else if shares == 0 && shortMA > longMA {
+			action = "BUY"
+			reason = "short moving average crossed above long moving average"
+		} else if shares > 0 && shortMA < longMA {
+			action = "SELL"
+			reason = "short moving average crossed below long moving average"
+		}
+
+		switch action {
+		case "BUY":
+			execPrice := bar.Close * (1 + slippageRate)
+			buyShares := int(cash / (execPrice * (1 + feeRate)))
+			if buyShares <= 0 {
+				continue
+			}
+			fee := float64(buyShares) * execPrice * feeRate
+			cash -= float64(buyShares)*execPrice + fee
+			totalFees += fee
+			shares = buyShares
+			entryPrice = execPrice
+			trades = append(trades, backtestTrade{
+				Date:   bar.Date,
+				Action: action,
+				Price:  execPrice,
+				Shares: buyShares,
+				Fee:    fee,
+				Cash:   cash,
+				Equity: cash + float64(shares)*bar.Close,
+				Reason: reason,
+			})
+		case "SELL":
+			if shares <= 0 {
+				continue
+			}
+			execPrice := bar.Close * (1 - slippageRate)
+			fee := float64(shares) * execPrice * feeRate
+			proceeds := float64(shares)*execPrice - fee
+			cash += proceeds
+			totalFees += fee
+			pnl := (execPrice - entryPrice) * float64(shares)
+			completedTrades++
+			if pnl > 0 {
+				winningTrades++
+			}
+			trades = append(trades, backtestTrade{
+				Date:   bar.Date,
+				Action: action,
+				Price:  execPrice,
+				Shares: shares,
+				Fee:    fee,
+				Cash:   cash,
+				Equity: cash,
+				Reason: reason,
+			})
+			shares = 0
+			entryPrice = 0
+		}
+	}
+
+	finalEquity := cash
+	if len(filtered) > 0 && shares > 0 {
+		finalEquity += float64(shares) * filtered[len(filtered)-1].Close
+	}
+	winRate := 0.0
+	if completedTrades > 0 {
+		winRate = float64(winningTrades) / float64(completedTrades)
+	}
+
+	return backtestResult{
+		Symbol:      symbol,
+		Name:        name,
+		FromDate:    fromDate,
+		ToDate:      toDate,
+		InitialCash: initialCash,
+		FinalEquity: finalEquity,
+		TotalReturn: (finalEquity - initialCash) / initialCash,
+		MaxDrawdown: maxDrawdown,
+		TradeCount:  len(trades),
+		WinRate:     winRate,
+		Mode:        mode,
+		FeeBps:      feeBps,
+		SlippageBps: slippageBps,
+		TotalFees:   totalFees,
+		Trades:      trades,
+		EquityCurve: equityCurve,
+	}, nil
+}
+
+func printBacktestSummary(result backtestResult) {
+	fmt.Printf(
+		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nMax drawdown: %.2f%%\nTrades: %d\nWin rate: %.2f%%\n\n",
+		result.Symbol,
+		result.FromDate,
+		result.ToDate,
+		result.Mode,
+		result.InitialCash,
+		result.FinalEquity,
+		result.TotalReturn*100,
+		result.MaxDrawdown*100,
+		result.TradeCount,
+		result.WinRate*100,
+	)
+}
+
+func writeBacktestReports(result backtestResult) error {
+	textPath := filepath.Join(reportsDir, "backtest_latest.txt")
+	htmlPath := filepath.Join(reportsDir, "backtest_latest.html")
+	svg := buildEquityCurveSVG(result.EquityCurve)
+
+	var tradeLines strings.Builder
+	for _, trade := range result.Trades {
+		fmt.Fprintf(&tradeLines, "%s %s price=%.2f shares=%d fee=%.2f cash=%.2f equity=%.2f reason=%s\n",
+			trade.Date, trade.Action, trade.Price, trade.Shares, trade.Fee, trade.Cash, trade.Equity, trade.Reason)
+	}
+
+	textContent := fmt.Sprintf(
+		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nMax drawdown: %.2f%%\nTrades: %d\nWin rate: %.2f%%\nFee bps: %.2f\nSlippage bps: %.2f\nTotal fees: %.2f\n\nTrade Log\n%s",
+		result.Symbol,
+		result.FromDate,
+		result.ToDate,
+		result.Mode,
+		result.InitialCash,
+		result.FinalEquity,
+		result.TotalReturn*100,
+		result.MaxDrawdown*100,
+		result.TradeCount,
+		result.WinRate*100,
+		result.FeeBps,
+		result.SlippageBps,
+		result.TotalFees,
+		tradeLines.String(),
+	)
+
+	var rows strings.Builder
+	for _, trade := range result.Trades {
+		fmt.Fprintf(&rows, `<tr><td>%s</td><td>%s</td><td>%.2f</td><td>%d</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s</td></tr>`,
+			html.EscapeString(trade.Date),
+			html.EscapeString(trade.Action),
+			trade.Price,
+			trade.Shares,
+			trade.Fee,
+			trade.Cash,
+			trade.Equity,
+			html.EscapeString(trade.Reason),
+		)
+	}
+	if len(result.Trades) == 0 {
+		rows.WriteString(`<tr><td colspan="8">No trades</td></tr>`)
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Report</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1 { margin: 0 0 16px; font-size: 36px; }
+    .meta { line-height: 1.8; color: #6d6559; }
+    table { width: 100%%; border-collapse: collapse; margin-top: 18px; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6d6559; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Backtest %s</h1>
+      <div class="meta">
+        <div>Range: %s to %s</div>
+        <div>Mode: %s</div>
+        <div>Initial cash: %.2f</div>
+        <div>Final equity: %.2f</div>
+        <div>Total return: %.2f%%</div>
+        <div>Max drawdown: %.2f%%</div>
+        <div>Trades: %d</div>
+        <div>Win rate: %.2f%%</div>
+        <div>Fee bps: %.2f</div>
+        <div>Slippage bps: %.2f</div>
+        <div>Total fees: %.2f</div>
+      </div>
+      <div style="margin-top:18px">%s</div>
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Action</th><th>Price</th><th>Shares</th><th>Fee</th><th>Cash</th><th>Equity</th><th>Reason</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`,
+		html.EscapeString(result.Symbol),
+		html.EscapeString(result.FromDate),
+		html.EscapeString(result.ToDate),
+		html.EscapeString(result.Mode),
+		result.InitialCash,
+		result.FinalEquity,
+		result.TotalReturn*100,
+		result.MaxDrawdown*100,
+		result.TradeCount,
+		result.WinRate*100,
+		result.FeeBps,
+		result.SlippageBps,
+		result.TotalFees,
+		svg,
+		rows.String(),
+	)
+
+	if err := os.WriteFile(textPath, []byte(textContent), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) error {
+	textPath := filepath.Join(reportsDir, "backtest_scan.txt")
+	htmlPath := filepath.Join(reportsDir, "backtest_scan.html")
+
+	var textBuilder strings.Builder
+	fmt.Fprintf(&textBuilder, "Batch Backtest %s -> %s\nInitial cash: %.2f\nFee bps: %.2f\nSlippage bps: %.2f\n\n", fromDate, toDate, initialCash, feeBps, slippageBps)
+	for i, result := range results {
+		nameLine := result.Symbol
+		if result.Name != "" {
+			nameLine += " " + result.Name
+		}
+		fmt.Fprintf(&textBuilder, "%d. %s\n", i+1, nameLine)
+		fmt.Fprintf(&textBuilder, "   Return: %.2f%%\n", result.TotalReturn*100)
+		fmt.Fprintf(&textBuilder, "   Max drawdown: %.2f%%\n", result.MaxDrawdown*100)
+		fmt.Fprintf(&textBuilder, "   Trades: %d\n", result.TradeCount)
+		fmt.Fprintf(&textBuilder, "   Win rate: %.2f%%\n\n", result.WinRate*100)
+	}
+
+	var rows strings.Builder
+	for i, result := range results {
+		name := result.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%.2f%%</td><td>%.2f%%</td><td>%d</td><td>%.2f%%</td><td>%.2f</td></tr>`,
+			i+1,
+			html.EscapeString(result.Symbol),
+			html.EscapeString(name),
+			result.TotalReturn*100,
+			result.MaxDrawdown*100,
+			result.TradeCount,
+			result.WinRate*100,
+			result.FinalEquity,
+		)
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Batch Backtest</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1 { margin: 0 0 16px; font-size: 36px; }
+    .meta { line-height: 1.8; color: #6d6559; }
+    table { width: 100%%; border-collapse: collapse; margin-top: 18px; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6d6559; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Batch Backtest</h1>
+      <div class="meta">
+        <div>Range: %s to %s</div>
+        <div>Initial cash: %.2f</div>
+        <div>Fee bps: %.2f</div>
+        <div>Slippage bps: %.2f</div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Return</th><th>Max DD</th><th>Trades</th><th>Win Rate</th><th>Final Equity</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`, html.EscapeString(fromDate), html.EscapeString(toDate), initialCash, feeBps, slippageBps, rows.String())
+
+	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildEquityCurveSVG(curve []backtestTrade) string {
+	if len(curve) == 0 {
+		return ""
+	}
+
+	minEquity := curve[0].Equity
+	maxEquity := curve[0].Equity
+	for _, point := range curve {
+		if point.Equity < minEquity {
+			minEquity = point.Equity
+		}
+		if point.Equity > maxEquity {
+			maxEquity = point.Equity
+		}
+	}
+	if maxEquity == minEquity {
+		maxEquity = minEquity + 1
+	}
+
+	width := 900.0
+	height := 240.0
+	points := make([]string, 0, len(curve))
+	for i, point := range curve {
+		x := (float64(i) / float64(max(1, len(curve)-1))) * width
+		y := height - ((point.Equity-minEquity)/(maxEquity-minEquity))*height
+		points = append(points, fmt.Sprintf("%.2f,%.2f", x, y))
+	}
+
+	return fmt.Sprintf(`<svg viewBox="0 0 %.0f %.0f" width="100%%" height="240" role="img" aria-label="Equity curve"><rect x="0" y="0" width="100%%" height="100%%" fill="#f7f1e7"/><polyline fill="none" stroke="#0f766e" stroke-width="3" points="%s"/></svg>`,
+		width, height, strings.Join(points, " "))
+}
+
+func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func loadConfig(path string) (config, error) {

@@ -20,6 +20,10 @@ Current MVP behavior:
 - writes a focus-only shortlist to `reports/a_share_focus.txt` and `reports/a_share_focus.html`
 - uses Tushare Pro for both the A-share universe list and daily bars whenever available
 - reads the A-share scan universe from `data/a_share_universe.csv`, so you can control which symbols are scanned
+- supports single-symbol backtests with `--backtest --symbol 001696 --from 2025-01-01 --to 2026-03-18 --cash 100000`
+- writes backtest reports to `reports/backtest_latest.txt` and `reports/backtest_latest.html`
+- supports batch backtests over `data/a_share_universe.csv` with `--backtest-scan --from 2025-01-01 --to 2026-03-18 --top 10`
+- backtests support `--fee-bps` and `--slippage-bps`
 - stores signal records, execution records, and current position state in SQLite
 - runs one execution on startup
 - waits for the next configured cron time and runs again
