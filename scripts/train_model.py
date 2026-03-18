@@ -60,6 +60,12 @@ def parse_args():
         default=0.001,
         help="L2 regularization strength.",
     )
+    parser.add_argument(
+        "--rolling-windows",
+        type=int,
+        default=4,
+        help="Number of rolling validation windows.",
+    )
     return parser.parse_args()
 
 
@@ -177,13 +183,46 @@ def evaluate(rows, weights, bias):
     }
 
 
-def write_outputs(reports_dir, label_name, feature_names, weights, bias, means, stds, test_rows, predictions, metrics):
+def rolling_validate(dataset, learning_rate, epochs, l2, windows):
+    if windows <= 1 or len(dataset) < windows * 20:
+        return []
+
+    fold_size = len(dataset) // (windows + 1)
+    results = []
+    for fold in range(1, windows + 1):
+        train_end = fold * fold_size
+        test_end = min((fold + 1) * fold_size, len(dataset))
+        train_rows = dataset[:train_end]
+        test_rows = dataset[train_end:test_end]
+        if len(train_rows) < 20 or len(test_rows) < 10:
+            continue
+        train_rows, test_rows, _, _ = standardize(train_rows, test_rows)
+        weights, bias = train_linear_model(train_rows, learning_rate, epochs, l2)
+        _, metrics = evaluate(test_rows, weights, bias)
+        results.append(
+            {
+                "fold": fold,
+                "train_rows": len(train_rows),
+                "test_rows": len(test_rows),
+                "mae": metrics["mae"],
+                "rmse": metrics["rmse"],
+                "directional_accuracy": metrics["directional_accuracy"],
+                "train_end_date": train_rows[-1]["date"],
+                "test_start_date": test_rows[0]["date"],
+                "test_end_date": test_rows[-1]["date"],
+            }
+        )
+    return results
+
+
+def write_outputs(reports_dir, label_name, feature_names, weights, bias, means, stds, test_rows, predictions, metrics, rolling_results):
     reports_path = Path(reports_dir)
     reports_path.mkdir(parents=True, exist_ok=True)
 
     model_path = reports_path / "linear_model.json"
     summary_path = reports_path / "model_train.txt"
     predictions_path = reports_path / "model_predictions.csv"
+    rolling_path = reports_path / "model_rolling.txt"
 
     feature_weights = [
         {"feature": feature, "weight": weight, "mean": mu, "std": sigma}
@@ -196,6 +235,7 @@ def write_outputs(reports_dir, label_name, feature_names, weights, bias, means, 
         "bias": bias,
         "features": feature_weights,
         "metrics": metrics,
+        "rolling_metrics": rolling_results,
     }
     model_path.write_text(json.dumps(model_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -211,7 +251,27 @@ def write_outputs(reports_dir, label_name, feature_names, weights, bias, means, 
     ]
     for item in feature_weights[:10]:
         lines.append(f"{item['feature']}: {item['weight']:.6f}")
+    if rolling_results:
+        lines.append("")
+        lines.append("Rolling Validation")
+        for item in rolling_results:
+            lines.append(
+                f"fold {item['fold']}: mae={item['mae']:.6f} rmse={item['rmse']:.6f} directional_accuracy={item['directional_accuracy'] * 100:.2f}% "
+                f"train_end={item['train_end_date']} test={item['test_start_date']}->{item['test_end_date']}"
+            )
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    rolling_lines = [f"Rolling Validation for {label_name}"]
+    if rolling_results:
+        for item in rolling_results:
+            rolling_lines.append(
+                f"fold {item['fold']}: train_rows={item['train_rows']} test_rows={item['test_rows']} "
+                f"mae={item['mae']:.6f} rmse={item['rmse']:.6f} directional_accuracy={item['directional_accuracy'] * 100:.2f}% "
+                f"train_end={item['train_end_date']} test={item['test_start_date']}->{item['test_end_date']}"
+            )
+    else:
+        rolling_lines.append("insufficient rows for rolling validation")
+    rolling_path.write_text("\n".join(rolling_lines) + "\n", encoding="utf-8")
 
     with predictions_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -230,13 +290,17 @@ def main():
     train_rows, test_rows, means, stds = standardize(train_rows, test_rows)
     weights, bias = train_linear_model(train_rows, args.learning_rate, args.epochs, args.l2)
     predictions, metrics = evaluate(test_rows, weights, bias)
-    write_outputs(args.reports_dir, args.label, DEFAULT_FEATURES, weights, bias, means, stds, test_rows, predictions, metrics)
+    rolling_results = rolling_validate(dataset, args.learning_rate, args.epochs, args.l2, args.rolling_windows)
+    write_outputs(args.reports_dir, args.label, DEFAULT_FEATURES, weights, bias, means, stds, test_rows, predictions, metrics, rolling_results)
 
     print(f"trained linear model for {args.label}")
     print(f"test rows: {len(test_rows)}")
     print(f"mae: {metrics['mae']:.6f}")
     print(f"rmse: {metrics['rmse']:.6f}")
     print(f"directional_accuracy: {metrics['directional_accuracy'] * 100:.2f}%")
+    if rolling_results:
+        avg_direction = mean([item["directional_accuracy"] for item in rolling_results])
+        print(f"rolling_directional_accuracy: {avg_direction * 100:.2f}%")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,9 @@ const aShareUniversePath = "data/a_share_universe.csv"
 const cacheDir = "data/cache"
 const aShareBenchmarkSymbol = "000300.SH"
 
+var cachedLinearModel *linearModel
+var linearModelLoaded bool
+
 type marketKind string
 
 const (
@@ -162,6 +165,7 @@ type scanCandidate struct {
 	RotationScore      float64
 	StrategyAlignment  float64
 	StrategyVotes      string
+	ModelScore         float64
 	RiskPenalty        float64
 	AvgVolume          float64
 	Trigger            string
@@ -299,6 +303,20 @@ type datasetRow struct {
 	Label5D           float64
 	Label10D          float64
 	Label20D          float64
+}
+
+type linearModelFeature struct {
+	Feature string  `json:"feature"`
+	Weight  float64 `json:"weight"`
+	Mean    float64 `json:"mean"`
+	Std     float64 `json:"std"`
+}
+
+type linearModel struct {
+	Label          string               `json:"label"`
+	Bias           float64              `json:"bias"`
+	Features       []linearModelFeature `json:"features"`
+	RollingMetrics []map[string]any     `json:"rolling_metrics"`
 }
 
 type marketSeries struct {
@@ -1616,6 +1634,7 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 	score += candidate.VolumeTrendScore * 0.70
 	score += candidate.RotationScore * 1.20
 	score += candidate.StrategyAlignment * 1.50
+	score += candidate.ModelScore * 0.80
 	if candidate.RiskPenalty > 0 {
 		score -= candidate.RiskPenalty
 	}
@@ -2372,6 +2391,60 @@ func sanitizeCSV(value string) string {
 	value = strings.ReplaceAll(value, ",", " ")
 	value = strings.ReplaceAll(value, "\n", " ")
 	return value
+}
+
+func getLinearModel() *linearModel {
+	if linearModelLoaded {
+		return cachedLinearModel
+	}
+	linearModelLoaded = true
+
+	path := filepath.Join(reportsDir, "linear_model.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var model linearModel
+	if err := json.Unmarshal(content, &model); err != nil {
+		return nil
+	}
+	cachedLinearModel = &model
+	return cachedLinearModel
+}
+
+func predictLinearModel(candidate scanCandidate) float64 {
+	model := getLinearModel()
+	if model == nil {
+		return 0
+	}
+
+	featureValues := map[string]float64{
+		"score":               candidate.Score,
+		"trend_score":         candidate.TrendScore,
+		"liquidity_score":     candidate.LiquidityScore,
+		"structure_score":     candidate.StructureScore,
+		"momentum_score":      candidate.MomentumScore,
+		"persistence_score":   candidate.PersistenceScore,
+		"breakout_score":      candidate.BreakoutScore,
+		"volume_trend_score":  candidate.VolumeTrendScore,
+		"short_return_score":  candidate.ShortReturnScore,
+		"medium_return_score": candidate.MediumReturnScore,
+		"rotation_score":      candidate.RotationScore,
+		"strategy_alignment":  candidate.StrategyAlignment,
+		"breadth":             0.5,
+		"regime_exposure":     1.0,
+	}
+
+	score := model.Bias
+	for _, feature := range model.Features {
+		value := featureValues[feature.Feature]
+		denom := feature.Std
+		if denom == 0 {
+			denom = 1
+		}
+		score += ((value - feature.Mean) / denom) * feature.Weight
+	}
+	return score
 }
 
 func buildEquityCurveSVG(curve []backtestTrade) string {
@@ -4243,8 +4316,7 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	score += strategyAlignment
 
 	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
-
-	return scanCandidate{
+	candidate := scanCandidate{
 		Symbol:            symbol,
 		Name:              name,
 		Industry:          industry,
@@ -4273,7 +4345,12 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 		MarketDate:        latest.Date,
 		Reason:            reason,
 		Plan:              planForBucket(bucket, action, shortMA, longMA, avgVolume),
-	}, nil
+	}
+	candidate.ModelScore = predictLinearModel(candidate)
+	if candidate.ModelScore != 0 {
+		candidate.Score = candidate.Score*0.65 + candidate.ModelScore*0.35
+	}
+	return candidate, nil
 }
 
 func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64, float64, float64, float64, float64, float64, float64, float64, float64) {
@@ -4671,7 +4748,7 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
-		fmt.Fprintf(builder, "   Score Breakdown: trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | risk_penalty %.4f\n",
+		fmt.Fprintf(builder, "   Score Breakdown: trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | risk_penalty %.4f\n",
 			candidate.TrendScore,
 			candidate.LiquidityScore,
 			candidate.StructureScore,
@@ -4681,6 +4758,7 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 			candidate.VolumeTrendScore,
 			candidate.RotationScore,
 			candidate.StrategyAlignment,
+			candidate.ModelScore,
 			candidate.RiskPenalty,
 		)
 		if candidate.StrategyVotes != "" {
@@ -4747,7 +4825,7 @@ func buildBucketRows(candidates []scanCandidate) string {
 				candidate.BacktestTrades,
 			)
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>T %.4f | L %.4f | S %.4f | M %.4f | P %.4f | B %.4f | V %.4f | Rot %.4f | Strat %.4f | R %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small><br><small>%s</small>%s</td><td>%s</td><td>%s</td></tr>`,
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>T %.4f | L %.4f | S %.4f | M %.4f | P %.4f | B %.4f | V %.4f | Rot %.4f | Strat %.4f | Model %.4f | R %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small><br><small>%s</small>%s</td><td>%s</td><td>%s</td></tr>`,
 			i+1,
 			html.EscapeString(candidate.Symbol),
 			html.EscapeString(candidate.Name),
@@ -4764,6 +4842,7 @@ func buildBucketRows(candidates []scanCandidate) string {
 			candidate.VolumeTrendScore,
 			candidate.RotationScore,
 			candidate.StrategyAlignment,
+			candidate.ModelScore,
 			candidate.RiskPenalty,
 			candidate.AvgVolume,
 			candidate.ShortMA,
