@@ -273,6 +273,34 @@ type gridSearchResult struct {
 	Rebalances       int
 }
 
+type datasetRow struct {
+	Symbol            string
+	Name              string
+	Industry          string
+	Date              string
+	Close             float64
+	Volume            float64
+	ShortMA           float64
+	LongMA            float64
+	Score             float64
+	TrendScore        float64
+	LiquidityScore    float64
+	StructureScore    float64
+	MomentumScore     float64
+	PersistenceScore  float64
+	BreakoutScore     float64
+	VolumeTrendScore  float64
+	ShortReturnScore  float64
+	MediumReturnScore float64
+	RotationScore     float64
+	StrategyAlignment float64
+	Breadth           float64
+	RegimeExposure    float64
+	Label5D           float64
+	Label10D          float64
+	Label20D          float64
+}
+
 type marketSeries struct {
 	meta aShareSymbol
 	bars []marketBar
@@ -288,6 +316,7 @@ func main() {
 	backtestScan := flag.Bool("backtest-scan", false, "Run a backtest across the local A-share universe")
 	portfolioBacktest := flag.Bool("portfolio-backtest", false, "Run a portfolio backtest across the local A-share universe")
 	gridSearch := flag.Bool("grid-search", false, "Run a portfolio parameter grid search across short/long windows")
+	exportDataset := flag.Bool("export-dataset", false, "Export a training dataset with factor features and forward-return labels")
 	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
 	toDate := flag.String("to", "", "Backtest end date in YYYY-MM-DD")
 	initialCash := flag.Float64("cash", 100000, "Backtest initial cash")
@@ -373,6 +402,20 @@ func main() {
 			logger.Fatalf("write grid search reports: %v", err)
 		}
 		printGridSearchSummary(results, *fromDate, *toDate)
+		return
+	}
+	if *exportDataset {
+		if *fromDate == "" || *toDate == "" {
+			logger.Fatalf("dataset export requires --from and --to")
+		}
+		rows, err := exportTrainingDataset(cfg.Strategy, cfg.Portfolio, cfg.Regime, *fromDate, *toDate)
+		if err != nil {
+			logger.Fatalf("dataset export failed: %v", err)
+		}
+		if err := writeDatasetReports(rows, *fromDate, *toDate); err != nil {
+			logger.Fatalf("write dataset reports: %v", err)
+		}
+		fmt.Printf("Dataset export complete. %d rows written to %s and %s\n\n", len(rows), filepath.Join(reportsDir, "training_dataset.csv"), filepath.Join(reportsDir, "training_dataset.txt"))
 		return
 	}
 	if *scanAShare {
@@ -933,6 +976,107 @@ func runPortfolioGridSearch(strategy strategyConfig, risk riskConfig, portfolio 
 		return results[i].ExcessReturn > results[j].ExcessReturn
 	})
 	return results, nil
+}
+
+func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, regime regimeConfig, fromDate string, toDate string) ([]datasetRow, error) {
+	symbols, err := loadAShareUniverse()
+	if err != nil {
+		return nil, err
+	}
+
+	series := make([]marketSeries, 0, len(symbols))
+	for _, symbol := range symbols {
+		bars, _, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+		if err != nil || len(bars) < max(strategy.LongWindow, 21) {
+			continue
+		}
+		series = append(series, marketSeries{meta: symbol, bars: bars})
+	}
+	if len(series) == 0 {
+		return nil, errors.New("no market data available for dataset export")
+	}
+
+	dates := tradingDatesInRange(series[0].bars, fromDate, toDate)
+	if len(dates) == 0 {
+		return nil, errors.New("no trading dates available in requested range")
+	}
+
+	benchmarkBars, _ := loadAShareBenchmarkBars()
+	rows := make([]datasetRow, 0, len(series)*len(dates))
+	for _, item := range series {
+		for _, date := range dates {
+			history := barsUpToDate(item.bars, date)
+			if len(history) < strategy.LongWindow {
+				continue
+			}
+			candidate, err := rankCandidate(item.meta.Symbol, item.meta.Name, item.meta.Industry, history, "baostock", "", strategy, portfolio)
+			if err != nil {
+				continue
+			}
+			breadth := 0.0
+			exposure := 1.0
+			if len(benchmarkBars) >= strategy.LongWindow {
+				breadth = 0.5
+				_, exposure = benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), breadth, strategy.LongWindow, regime)
+			}
+			label5 := forwardReturn(item.bars, date, 5)
+			label10 := forwardReturn(item.bars, date, 10)
+			label20 := forwardReturn(item.bars, date, 20)
+			if math.IsNaN(label5) || math.IsNaN(label10) || math.IsNaN(label20) {
+				continue
+			}
+			rows = append(rows, datasetRow{
+				Symbol:            candidate.Symbol,
+				Name:              candidate.Name,
+				Industry:          candidate.Industry,
+				Date:              candidate.MarketDate,
+				Close:             candidate.ClosePrice,
+				Volume:            candidate.AvgVolume,
+				ShortMA:           candidate.ShortMA,
+				LongMA:            candidate.LongMA,
+				Score:             candidate.Score,
+				TrendScore:        candidate.TrendScore,
+				LiquidityScore:    candidate.LiquidityScore,
+				StructureScore:    candidate.StructureScore,
+				MomentumScore:     candidate.MomentumScore,
+				PersistenceScore:  candidate.PersistenceScore,
+				BreakoutScore:     candidate.BreakoutScore,
+				VolumeTrendScore:  candidate.VolumeTrendScore,
+				ShortReturnScore:  candidate.ShortReturnScore,
+				MediumReturnScore: candidate.MediumReturnScore,
+				RotationScore:     candidate.RotationScore,
+				StrategyAlignment: candidate.StrategyAlignment,
+				Breadth:           breadth,
+				RegimeExposure:    exposure,
+				Label5D:           label5,
+				Label10D:          label10,
+				Label20D:          label20,
+			})
+		}
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("dataset export produced no rows")
+	}
+	return rows, nil
+}
+
+func forwardReturn(bars []marketBar, date string, horizon int) float64 {
+	startIdx := -1
+	for i, bar := range bars {
+		if bar.Date == date {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx < 0 || startIdx+horizon >= len(bars) {
+		return math.NaN()
+	}
+	start := bars[startIdx].Close
+	end := bars[startIdx+horizon].Close
+	if start <= 0 {
+		return math.NaN()
+	}
+	return end/start - 1
 }
 
 func simulateBacktest(symbol string, name string, bars []marketBar, mode string, shortWindow int, longWindow int, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
@@ -2155,6 +2299,79 @@ func writeGridSearchReports(results []gridSearchResult, fromDate string, toDate 
 		return err
 	}
 	return writeDashboardReports()
+}
+
+func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) error {
+	csvPath := filepath.Join(reportsDir, "training_dataset.csv")
+	textPath := filepath.Join(reportsDir, "training_dataset.txt")
+
+	var csvBuilder strings.Builder
+	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
+	for _, row := range rows {
+		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+			row.Symbol,
+			sanitizeCSV(row.Name),
+			sanitizeCSV(row.Industry),
+			row.Date,
+			row.Close,
+			row.Volume,
+			row.ShortMA,
+			row.LongMA,
+			row.Score,
+			row.TrendScore,
+			row.LiquidityScore,
+			row.StructureScore,
+			row.MomentumScore,
+			row.PersistenceScore,
+			row.BreakoutScore,
+			row.VolumeTrendScore,
+			row.ShortReturnScore,
+			row.MediumReturnScore,
+			row.RotationScore,
+			row.StrategyAlignment,
+			row.Breadth,
+			row.RegimeExposure,
+			row.Label5D,
+			row.Label10D,
+			row.Label20D,
+		)
+	}
+
+	var textBuilder strings.Builder
+	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 18\nLabels: label_5d, label_10d, label_20d\nCSV: %s\n\nSample Rows\n",
+		fromDate,
+		toDate,
+		len(rows),
+		csvPath,
+	)
+	sampleCount := min(5, len(rows))
+	for i := 0; i < sampleCount; i++ {
+		row := rows[i]
+		fmt.Fprintf(&textBuilder, "%d. %s %s %s score=%.4f label5=%.2f%% label10=%.2f%% label20=%.2f%%\n",
+			i+1,
+			row.Date,
+			row.Symbol,
+			row.Name,
+			row.Score,
+			row.Label5D*100,
+			row.Label10D*100,
+			row.Label20D*100,
+		)
+	}
+
+	if err := os.WriteFile(csvPath, []byte(csvBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	return writeDashboardReports()
+}
+
+func sanitizeCSV(value string) string {
+	value = strings.ReplaceAll(value, ",", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
 }
 
 func buildEquityCurveSVG(curve []backtestTrade) string {

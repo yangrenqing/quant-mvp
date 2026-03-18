@@ -1,2 +1,5 @@
 data/quant.db
 reports/
+.DS_Store
+data/cache/
+/scheduler

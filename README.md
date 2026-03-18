@@ -29,6 +29,20 @@ Current MVP behavior:
 - writes a structured batch backtest snapshot to `reports/backtest_scan.csv`
 - enriches A-share scan and focus reports with the latest batch backtest snapshot when available
 - writes portfolio backtest reports to `reports/portfolio_backtest.txt` and `reports/portfolio_backtest.html`
+- exports model-ready factor datasets with `--export-dataset --from 2025-01-01 --to 2026-03-18`
+- includes a zero-dependency Python training script at `scripts/train_model.py`
 - stores signal records, execution records, and current position state in SQLite
 - runs one execution on startup
 - waits for the next configured cron time and runs again
+
+Model workflow:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+go run ./cmd/scheduler --export-dataset --from 2025-01-01 --to 2026-03-18
+python3 scripts/train_model.py --dataset reports/training_dataset.csv --label label_10d
+```
+
+Training outputs:
+- `reports/linear_model.json`
+- `reports/model_train.txt`
+- `reports/model_predictions.csv`
