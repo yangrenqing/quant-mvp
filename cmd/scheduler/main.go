@@ -82,6 +82,18 @@ type portfolioConfig struct {
 	StopCooldownDays       int
 	ExitCooldownDays       int
 	TrendBreakCooldownDays int
+	MomentumWeight         float64
+	PersistenceWeight      float64
+	BacktestExcessWeight   float64
+	BacktestReturnWeight   float64
+	BacktestDrawdownWeight float64
+	WatchPenalty           float64
+	TrendStrategyEnabled   bool
+	BreakoutEnabled        bool
+	PullbackEnabled        bool
+	TrendStrategyWeight    float64
+	BreakoutStrategyWeight float64
+	PullbackStrategyWeight float64
 }
 
 type regimeConfig struct {
@@ -134,6 +146,16 @@ type scanCandidate struct {
 	TrendScore         float64
 	LiquidityScore     float64
 	StructureScore     float64
+	MomentumScore      float64
+	PersistenceScore   float64
+	BreakoutScore      float64
+	VolumeTrendScore   float64
+	ShortReturnScore   float64
+	MediumReturnScore  float64
+	IndustryStrength   float64
+	RotationScore      float64
+	StrategyAlignment  float64
+	StrategyVotes      string
 	RiskPenalty        float64
 	AvgVolume          float64
 	Trigger            string
@@ -233,6 +255,18 @@ type portfolioBacktestResult struct {
 	RegimeLabel      string
 }
 
+type gridSearchResult struct {
+	ShortWindow      int
+	LongWindow       int
+	FinalEquity      float64
+	TotalReturn      float64
+	AnnualizedReturn float64
+	BenchmarkReturn  float64
+	ExcessReturn     float64
+	MaxDrawdown      float64
+	Rebalances       int
+}
+
 type marketSeries struct {
 	meta aShareSymbol
 	bars []marketBar
@@ -247,11 +281,16 @@ func main() {
 	backtest := flag.Bool("backtest", false, "Run a single-symbol backtest")
 	backtestScan := flag.Bool("backtest-scan", false, "Run a backtest across the local A-share universe")
 	portfolioBacktest := flag.Bool("portfolio-backtest", false, "Run a portfolio backtest across the local A-share universe")
+	gridSearch := flag.Bool("grid-search", false, "Run a portfolio parameter grid search across short/long windows")
 	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
 	toDate := flag.String("to", "", "Backtest end date in YYYY-MM-DD")
 	initialCash := flag.Float64("cash", 100000, "Backtest initial cash")
 	feeBps := flag.Float64("fee-bps", 10, "Backtest transaction fee in basis points")
 	slippageBps := flag.Float64("slippage-bps", 5, "Backtest slippage in basis points")
+	shortMin := flag.Int("short-min", 3, "Grid search minimum short window")
+	shortMax := flag.Int("short-max", 8, "Grid search maximum short window")
+	longMin := flag.Int("long-min", 8, "Grid search minimum long window")
+	longMax := flag.Int("long-max", 20, "Grid search maximum long window")
 	flag.Parse()
 
 	cfg, err := loadConfig(configPath)
@@ -316,8 +355,22 @@ func main() {
 		printPortfolioBacktestSummary(result)
 		return
 	}
+	if *gridSearch {
+		if *fromDate == "" || *toDate == "" {
+			logger.Fatalf("grid search requires --from and --to")
+		}
+		results, err := runPortfolioGridSearch(cfg.Strategy, cfg.Risk, cfg.Portfolio, cfg.Regime, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps, *topN, *shortMin, *shortMax, *longMin, *longMax)
+		if err != nil {
+			logger.Fatalf("grid search failed: %v", err)
+		}
+		if err := writeGridSearchReports(results, *fromDate, *toDate); err != nil {
+			logger.Fatalf("write grid search reports: %v", err)
+		}
+		printGridSearchSummary(results, *fromDate, *toDate)
+		return
+	}
 	if *scanAShare {
-		if err := runAShareScan(cfg.Strategy, *topN); err != nil {
+		if err := runAShareScan(cfg.Strategy, cfg.Portfolio, *topN); err != nil {
 			logger.Fatalf("a-share scan failed: %v", err)
 		}
 		return
@@ -352,7 +405,7 @@ func main() {
 	}
 }
 
-func runAShareScan(strategy strategyConfig, topN int) error {
+func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int) error {
 	if topN <= 0 {
 		topN = 10
 	}
@@ -371,7 +424,7 @@ func runAShareScan(strategy strategyConfig, topN int) error {
 			continue
 		}
 
-		candidate, err := rankCandidate(symbol.Symbol, symbol.Name, symbol.Industry, bars, dataSource, sourceErr, strategy)
+		candidate, err := rankCandidate(symbol.Symbol, symbol.Name, symbol.Industry, bars, dataSource, sourceErr, strategy, portfolio)
 		if err != nil {
 			continue
 		}
@@ -526,7 +579,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if len(history) < strategy.LongWindow {
 				continue
 			}
-			candidate, err := rankCandidate(item.meta.Symbol, item.meta.Name, item.meta.Industry, history, "baostock", "", strategy)
+			candidate, err := rankCandidate(item.meta.Symbol, item.meta.Name, item.meta.Industry, history, "baostock", "", strategy, portfolio)
 			if err != nil {
 				continue
 			}
@@ -540,6 +593,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				candidates = append(candidates, candidate)
 			}
 		}
+		applyRotationOverlay(candidates)
 
 		relativeStrengthFloor := candidateMedianScore(candidates)
 		regimeLabel, targetExposure := benchmarkMarketRegime(barsUpToDate(benchmarkBars, date), strategy.LongWindow, regime)
@@ -557,7 +611,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			candidates = nil
 		}
 
-		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings)
+		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings, portfolio)
 		if len(candidates) > 0 {
 			latestSelection = append([]scanCandidate(nil), candidates...)
 		}
@@ -803,6 +857,57 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		ExposureLevel:    lastExposureLevel,
 		RegimeLabel:      lastRegimeLabel,
 	}, nil
+}
+
+func runPortfolioGridSearch(strategy strategyConfig, risk riskConfig, portfolio portfolioConfig, regime regimeConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64, topN int, shortMin int, shortMax int, longMin int, longMax int) ([]gridSearchResult, error) {
+	if shortMin <= 0 || longMin <= 0 {
+		return nil, errors.New("grid search windows must be positive")
+	}
+	if shortMin > shortMax || longMin > longMax {
+		return nil, errors.New("grid search min window cannot exceed max window")
+	}
+
+	results := make([]gridSearchResult, 0)
+	for shortWindow := shortMin; shortWindow <= shortMax; shortWindow++ {
+		for longWindow := longMin; longWindow <= longMax; longWindow++ {
+			if shortWindow >= longWindow {
+				continue
+			}
+			strategyVariant := strategy
+			strategyVariant.ShortWindow = shortWindow
+			strategyVariant.LongWindow = longWindow
+
+			result, err := runPortfolioBacktest(strategyVariant, risk, portfolio, regime, fromDate, toDate, initialCash, feeBps, slippageBps, topN)
+			if err != nil {
+				continue
+			}
+			results = append(results, gridSearchResult{
+				ShortWindow:      shortWindow,
+				LongWindow:       longWindow,
+				FinalEquity:      result.FinalEquity,
+				TotalReturn:      result.TotalReturn,
+				AnnualizedReturn: result.AnnualizedReturn,
+				BenchmarkReturn:  result.BenchmarkReturn,
+				ExcessReturn:     result.ExcessReturn,
+				MaxDrawdown:      result.MaxDrawdown,
+				Rebalances:       result.RebalanceCount,
+			})
+		}
+	}
+	if len(results) == 0 {
+		return nil, errors.New("no valid grid search results were generated")
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].TotalReturn != results[j].TotalReturn {
+			return results[i].TotalReturn > results[j].TotalReturn
+		}
+		if results[i].MaxDrawdown != results[j].MaxDrawdown {
+			return results[i].MaxDrawdown < results[j].MaxDrawdown
+		}
+		return results[i].ExcessReturn > results[j].ExcessReturn
+	})
+	return results, nil
 }
 
 func simulateBacktest(symbol string, name string, bars []marketBar, mode string, shortWindow int, longWindow int, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
@@ -1221,55 +1326,197 @@ func benchmarkMarketRegime(history []marketBar, longWindow int, regime regimeCon
 	return "risk_on", 1.0
 }
 
-func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings int) []scanCandidate {
+func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings int, portfolio portfolioConfig) []scanCandidate {
 	if len(candidates) == 0 {
 		return candidates
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
-		leftScore := portfolioSelectionScore(candidates[i])
-		rightScore := portfolioSelectionScore(candidates[j])
+		leftScore := portfolioSelectionScore(candidates[i], portfolio)
+		rightScore := portfolioSelectionScore(candidates[j], portfolio)
 		if leftScore != rightScore {
 			return leftScore > rightScore
 		}
 		return candidates[i].Score > candidates[j].Score
 	})
 
-	if topN > 0 && len(candidates) > topN {
-		candidates = candidates[:topN]
+	limit := len(candidates)
+	if topN > 0 && limit > topN*3 {
+		limit = topN * 3
 	}
+	candidates = candidates[:limit]
 
-	selected := make([]scanCandidate, 0, len(candidates))
+	selected := make([]scanCandidate, 0, min(limit, max(minHoldings, topN)))
+	industryCount := make(map[string]int)
 	for _, candidate := range candidates {
 		// Prefer names with either strong standalone signal quality or
 		// acceptable historical validation.
-		if candidate.Score >= 0.05 || candidate.BacktestExcess >= 0 || candidate.BacktestReturn >= 0 {
-			selected = append(selected, candidate)
+		if candidate.Score < 0.05 && candidate.BacktestExcess < 0 && candidate.BacktestReturn < 0 {
+			continue
+		}
+		if len(candidates) > minHoldings*2 && candidate.RotationScore < 0 {
+			continue
+		}
+		industryKey := normalizedIndustry(candidate.Industry)
+		if industryKey != "" && industryCount[industryKey] >= 1 {
+			continue
+		}
+		if isSimilarToSelected(candidate, selected) {
+			continue
+		}
+		selected = append(selected, candidate)
+		if industryKey != "" {
+			industryCount[industryKey]++
+		}
+		if topN > 0 && len(selected) >= topN {
+			break
 		}
 	}
+
 	if len(selected) >= minHoldings {
 		return selected
 	}
-	if len(candidates) < minHoldings {
-		return candidates
+
+	for _, candidate := range candidates {
+		if containsCandidate(selected, candidate.Symbol) {
+			continue
+		}
+		selected = append(selected, candidate)
+		if len(selected) >= minHoldings {
+			return selected
+		}
 	}
-	return candidates[:minHoldings]
+	if len(selected) == 0 {
+		if len(candidates) < minHoldings {
+			return candidates
+		}
+		return candidates[:minHoldings]
+	}
+	return selected
 }
 
-func portfolioSelectionScore(candidate scanCandidate) float64 {
+func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig) float64 {
 	score := candidate.Score
 	if candidate.HasBacktest {
-		score += candidate.BacktestExcess * 0.35
-		score += candidate.BacktestReturn * 0.15
-		score -= candidate.BacktestDrawdown * 0.20
+		score += candidate.BacktestExcess * portfolio.BacktestExcessWeight
+		score += candidate.BacktestReturn * portfolio.BacktestReturnWeight
+		score -= candidate.BacktestDrawdown * portfolio.BacktestDrawdownWeight
 	}
+	score += candidate.MomentumScore * portfolio.MomentumWeight
+	score += candidate.PersistenceScore * portfolio.PersistenceWeight
+	score += candidate.BreakoutScore * 0.80
+	score += candidate.VolumeTrendScore * 0.70
+	score += candidate.RotationScore * 1.20
+	score += candidate.StrategyAlignment * 1.50
 	if candidate.RiskPenalty > 0 {
 		score -= candidate.RiskPenalty
 	}
 	if candidate.Bucket == "观望" {
-		score -= 0.02
+		score -= portfolio.WatchPenalty
 	}
 	return score
+}
+
+func applyRotationOverlay(candidates []scanCandidate) {
+	if len(candidates) == 0 {
+		return
+	}
+
+	shortValues := make([]float64, 0, len(candidates))
+	mediumValues := make([]float64, 0, len(candidates))
+	for _, candidate := range candidates {
+		shortValues = append(shortValues, candidate.ShortReturnScore)
+		mediumValues = append(mediumValues, candidate.MediumReturnScore)
+	}
+	shortMedian := medianFloat(shortValues)
+	mediumMedian := medianFloat(mediumValues)
+
+	industrySums := make(map[string]float64)
+	industryCounts := make(map[string]int)
+	for _, candidate := range candidates {
+		industryKey := normalizedIndustry(candidate.Industry)
+		if industryKey == "" {
+			continue
+		}
+		industrySums[industryKey] += candidate.MediumReturnScore
+		industryCounts[industryKey]++
+	}
+
+	for i := range candidates {
+		industryStrength := 0.0
+		industryKey := normalizedIndustry(candidates[i].Industry)
+		if industryKey != "" && industryCounts[industryKey] > 0 {
+			industryStrength = industrySums[industryKey] / float64(industryCounts[industryKey])
+		}
+		candidates[i].IndustryStrength = industryStrength
+		candidates[i].RotationScore =
+			clampFloat(candidates[i].ShortReturnScore-shortMedian, -0.15, 0.15)*0.45 +
+				clampFloat(candidates[i].MediumReturnScore-mediumMedian, -0.20, 0.20)*0.45 +
+				clampFloat(industryStrength-mediumMedian, -0.10, 0.10)*0.30
+	}
+}
+
+func trailingReturn(closes []float64, lookback int) float64 {
+	if len(closes) < 2 {
+		return 0
+	}
+	if lookback <= 0 {
+		lookback = 1
+	}
+	if lookback >= len(closes) {
+		lookback = len(closes) - 1
+	}
+	base := closes[len(closes)-1-lookback]
+	latest := closes[len(closes)-1]
+	if base <= 0 {
+		return 0
+	}
+	return latest/base - 1
+}
+
+func medianFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 0 {
+		return (sorted[mid-1] + sorted[mid]) / 2
+	}
+	return sorted[mid]
+}
+
+func normalizedIndustry(industry string) string {
+	normalized := strings.TrimSpace(industry)
+	if normalized == "" || normalized == "-" {
+		return ""
+	}
+	return normalized
+}
+
+func isSimilarToSelected(candidate scanCandidate, selected []scanCandidate) bool {
+	for _, existing := range selected {
+		if normalizedIndustry(candidate.Industry) != "" && normalizedIndustry(candidate.Industry) == normalizedIndustry(existing.Industry) {
+			return true
+		}
+		if math.Abs(candidate.TrendScore-existing.TrendScore) < 0.01 &&
+			math.Abs(candidate.MomentumScore-existing.MomentumScore) < 0.01 &&
+			math.Abs(candidate.BreakoutScore-existing.BreakoutScore) < 0.01 &&
+			math.Abs(candidate.VolumeTrendScore-existing.VolumeTrendScore) < 0.01 {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCandidate(selected []scanCandidate, symbol string) bool {
+	for _, candidate := range selected {
+		if candidate.Symbol == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 func printBacktestSummary(result backtestResult) {
@@ -1570,6 +1817,28 @@ func printPortfolioBacktestSummary(result portfolioBacktestResult) {
 	)
 }
 
+func printGridSearchSummary(results []gridSearchResult, fromDate string, toDate string) {
+	if len(results) == 0 {
+		fmt.Printf("Grid Search %s -> %s\nNo valid parameter combinations.\n\n", fromDate, toDate)
+		return
+	}
+	best := results[0]
+	fmt.Printf(
+		"Grid Search %s -> %s\nBest short/long: %d / %d\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\n\n",
+		fromDate,
+		toDate,
+		best.ShortWindow,
+		best.LongWindow,
+		best.FinalEquity,
+		best.TotalReturn*100,
+		best.AnnualizedReturn*100,
+		best.BenchmarkReturn*100,
+		best.ExcessReturn*100,
+		best.MaxDrawdown*100,
+		best.Rebalances,
+	)
+}
+
 func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	textPath := filepath.Join(reportsDir, "portfolio_backtest.txt")
 	htmlPath := filepath.Join(reportsDir, "portfolio_backtest.html")
@@ -1721,6 +1990,104 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		})
 	}
 	if err := writeCSVFile(csvPath, csvRows); err != nil {
+		return err
+	}
+	return writeDashboardReports()
+}
+
+func writeGridSearchReports(results []gridSearchResult, fromDate string, toDate string) error {
+	textPath := filepath.Join(reportsDir, "grid_search.txt")
+	htmlPath := filepath.Join(reportsDir, "grid_search.html")
+	csvPath := filepath.Join(reportsDir, "grid_search.csv")
+
+	var textBuilder strings.Builder
+	fmt.Fprintf(&textBuilder, "Portfolio Grid Search %s -> %s\n\n", fromDate, toDate)
+	for i, result := range results {
+		fmt.Fprintf(&textBuilder, "%d. short=%d long=%d return=%.2f%% annualized=%.2f%% benchmark=%.2f%% excess=%.2f%% max_dd=%.2f%% rebalances=%d final_equity=%.2f\n",
+			i+1,
+			result.ShortWindow,
+			result.LongWindow,
+			result.TotalReturn*100,
+			result.AnnualizedReturn*100,
+			result.BenchmarkReturn*100,
+			result.ExcessReturn*100,
+			result.MaxDrawdown*100,
+			result.Rebalances,
+			result.FinalEquity,
+		)
+	}
+
+	var rows strings.Builder
+	for i, result := range results {
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%d</td><td>%d</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%d</td><td>%.2f</td></tr>`,
+			i+1,
+			result.ShortWindow,
+			result.LongWindow,
+			result.TotalReturn*100,
+			result.AnnualizedReturn*100,
+			result.BenchmarkReturn*100,
+			result.ExcessReturn*100,
+			result.MaxDrawdown*100,
+			result.Rebalances,
+			result.FinalEquity,
+		)
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portfolio Grid Search</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f3efe8; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1 { margin: 0 0 16px; font-size: 36px; }
+    table { width: 100%%; border-collapse: collapse; font-size: 15px; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6d6559; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Portfolio Grid Search %s -> %s</h1>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Short</th><th>Long</th><th>Return</th><th>Annualized</th><th>Benchmark</th><th>Excess</th><th>Max DD</th><th>Rebalances</th><th>Final Equity</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`, html.EscapeString(fromDate), html.EscapeString(toDate), rows.String())
+
+	var csvBuilder strings.Builder
+	csvBuilder.WriteString("rank,short_window,long_window,total_return,annualized_return,benchmark_return,excess_return,max_drawdown,rebalances,final_equity\n")
+	for i, result := range results {
+		fmt.Fprintf(&csvBuilder, "%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%.2f\n",
+			i+1,
+			result.ShortWindow,
+			result.LongWindow,
+			result.TotalReturn,
+			result.AnnualizedReturn,
+			result.BenchmarkReturn,
+			result.ExcessReturn,
+			result.MaxDrawdown,
+			result.Rebalances,
+			result.FinalEquity,
+		)
+	}
+
+	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(csvPath, []byte(csvBuilder.String()), 0o644); err != nil {
 		return err
 	}
 	return writeDashboardReports()
@@ -2061,6 +2428,16 @@ func max(a int, b int) int {
 	return b
 }
 
+func clampFloat(value float64, lower float64, upper float64) float64 {
+	if value < lower {
+		return lower
+	}
+	if value > upper {
+		return upper
+	}
+	return value
+}
+
 func min(a int, b int) int {
 	if a < b {
 		return a
@@ -2238,6 +2615,78 @@ func loadConfig(path string) (config, error) {
 					return config{}, fmt.Errorf("invalid portfolio.trend_break_cooldown_days: %w", convErr)
 				}
 				cfg.Portfolio.TrendBreakCooldownDays = v
+			case "momentum_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.momentum_weight: %w", convErr)
+				}
+				cfg.Portfolio.MomentumWeight = v
+			case "persistence_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.persistence_weight: %w", convErr)
+				}
+				cfg.Portfolio.PersistenceWeight = v
+			case "backtest_excess_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.backtest_excess_weight: %w", convErr)
+				}
+				cfg.Portfolio.BacktestExcessWeight = v
+			case "backtest_return_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.backtest_return_weight: %w", convErr)
+				}
+				cfg.Portfolio.BacktestReturnWeight = v
+			case "backtest_drawdown_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.backtest_drawdown_weight: %w", convErr)
+				}
+				cfg.Portfolio.BacktestDrawdownWeight = v
+			case "watch_penalty":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.watch_penalty: %w", convErr)
+				}
+				cfg.Portfolio.WatchPenalty = v
+			case "trend_strategy_enabled":
+				v, convErr := strconv.ParseBool(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.trend_strategy_enabled: %w", convErr)
+				}
+				cfg.Portfolio.TrendStrategyEnabled = v
+			case "breakout_enabled":
+				v, convErr := strconv.ParseBool(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.breakout_enabled: %w", convErr)
+				}
+				cfg.Portfolio.BreakoutEnabled = v
+			case "pullback_enabled":
+				v, convErr := strconv.ParseBool(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.pullback_enabled: %w", convErr)
+				}
+				cfg.Portfolio.PullbackEnabled = v
+			case "trend_strategy_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.trend_strategy_weight: %w", convErr)
+				}
+				cfg.Portfolio.TrendStrategyWeight = v
+			case "breakout_strategy_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.breakout_strategy_weight: %w", convErr)
+				}
+				cfg.Portfolio.BreakoutStrategyWeight = v
+			case "pullback_strategy_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.pullback_strategy_weight: %w", convErr)
+				}
+				cfg.Portfolio.PullbackStrategyWeight = v
 			}
 		case "regime":
 			switch key {
@@ -2349,6 +2798,38 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Portfolio.TrendBreakCooldownDays <= 0 {
 		cfg.Portfolio.TrendBreakCooldownDays = 4
+	}
+	if cfg.Portfolio.MomentumWeight == 0 {
+		cfg.Portfolio.MomentumWeight = 0.60
+	}
+	if cfg.Portfolio.PersistenceWeight == 0 {
+		cfg.Portfolio.PersistenceWeight = 0.60
+	}
+	if cfg.Portfolio.BacktestExcessWeight == 0 {
+		cfg.Portfolio.BacktestExcessWeight = 0.35
+	}
+	if cfg.Portfolio.BacktestReturnWeight == 0 {
+		cfg.Portfolio.BacktestReturnWeight = 0.15
+	}
+	if cfg.Portfolio.BacktestDrawdownWeight == 0 {
+		cfg.Portfolio.BacktestDrawdownWeight = 0.20
+	}
+	if cfg.Portfolio.WatchPenalty == 0 {
+		cfg.Portfolio.WatchPenalty = 0.02
+	}
+	if !cfg.Portfolio.TrendStrategyEnabled && !cfg.Portfolio.BreakoutEnabled && !cfg.Portfolio.PullbackEnabled {
+		cfg.Portfolio.TrendStrategyEnabled = true
+		cfg.Portfolio.BreakoutEnabled = true
+		cfg.Portfolio.PullbackEnabled = true
+	}
+	if cfg.Portfolio.TrendStrategyWeight == 0 {
+		cfg.Portfolio.TrendStrategyWeight = 1.0
+	}
+	if cfg.Portfolio.BreakoutStrategyWeight == 0 {
+		cfg.Portfolio.BreakoutStrategyWeight = 1.0
+	}
+	if cfg.Portfolio.PullbackStrategyWeight == 0 {
+		cfg.Portfolio.PullbackStrategyWeight = 1.0
 	}
 	if cfg.Regime.CautiousExposure <= 0 {
 		cfg.Regime.CautiousExposure = 0.45
@@ -3408,7 +3889,7 @@ func loadAShareUniverse() ([]aShareSymbol, error) {
 	return symbols, nil
 }
 
-func rankCandidate(symbol string, name string, industry string, bars []marketBar, dataSource string, sourceErr string, strategy strategyConfig) (scanCandidate, error) {
+func rankCandidate(symbol string, name string, industry string, bars []marketBar, dataSource string, sourceErr string, strategy strategyConfig, portfolio portfolioConfig) (scanCandidate, error) {
 	closes := make([]float64, 0, len(bars))
 	volumes := make([]float64, 0, len(bars))
 	for _, bar := range bars {
@@ -3423,49 +3904,61 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	shortMA := average(closes[len(closes)-strategy.ShortWindow:])
 	longMA := average(closes[len(closes)-strategy.LongWindow:])
 	avgVolume := average(volumes[len(volumes)-strategy.LongWindow:])
-	trendScore, liquidityScore, structureScore, riskPenalty, score := scoreCandidate(latest.Close, shortMA, longMA, avgVolume)
-	action := "HOLD"
-	reason := buildReasonWithSource("moving averages are neutral", withSourceSuffix(dataSource, sourceErr))
-	trigger := fmt.Sprintf("Break above %.2f with volume expansion", shortMA)
-
-	switch {
-	case shortMA > longMA:
-		action = "BUY"
-		reason = buildReasonWithSource("short moving average crossed above long moving average", withSourceSuffix(dataSource, sourceErr))
-		trigger = fmt.Sprintf("Hold above %.2f and keep short MA over long MA", shortMA)
-	case shortMA < longMA:
-		action = "SELL"
-		reason = buildReasonWithSource("short moving average crossed below long moving average", withSourceSuffix(dataSource, sourceErr))
-		trigger = fmt.Sprintf("Only reassess if price recovers above %.2f", longMA)
-	}
+	trendScore, liquidityScore, structureScore, momentumScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty, score := scoreCandidate(bars, strategy.ShortWindow, strategy.LongWindow)
+	shortReturnScore := trailingReturn(closes, min(5, len(closes)-1))
+	mediumReturnScore := trailingReturn(closes, min(20, len(closes)-1))
+	action, strategyAlignment, strategyVotes, reason, trigger := evaluateStrategyEnsemble(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, dataSource, sourceErr, portfolio)
+	score += strategyAlignment
 
 	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
 
 	return scanCandidate{
-		Symbol:         symbol,
-		Name:           name,
-		Industry:       industry,
-		Action:         action,
-		Bucket:         bucket,
-		Score:          score,
-		TrendScore:     trendScore,
-		LiquidityScore: liquidityScore,
-		StructureScore: structureScore,
-		RiskPenalty:    riskPenalty,
-		AvgVolume:      avgVolume,
-		Trigger:        trigger,
-		TriggerPrice:   triggerPrice,
-		AvoidTags:      avoidTags,
-		ShortMA:        shortMA,
-		LongMA:         longMA,
-		ClosePrice:     latest.Close,
-		MarketDate:     latest.Date,
-		Reason:         reason,
-		Plan:           planForBucket(bucket, action, shortMA, longMA, avgVolume),
+		Symbol:            symbol,
+		Name:              name,
+		Industry:          industry,
+		Action:            action,
+		Bucket:            bucket,
+		Score:             score,
+		TrendScore:        trendScore,
+		LiquidityScore:    liquidityScore,
+		StructureScore:    structureScore,
+		MomentumScore:     momentumScore,
+		PersistenceScore:  persistenceScore,
+		BreakoutScore:     breakoutScore,
+		VolumeTrendScore:  volumeTrendScore,
+		ShortReturnScore:  shortReturnScore,
+		MediumReturnScore: mediumReturnScore,
+		StrategyAlignment: strategyAlignment,
+		StrategyVotes:     strategyVotes,
+		RiskPenalty:       riskPenalty,
+		AvgVolume:         avgVolume,
+		Trigger:           trigger,
+		TriggerPrice:      triggerPrice,
+		AvoidTags:         avoidTags,
+		ShortMA:           shortMA,
+		LongMA:            longMA,
+		ClosePrice:        latest.Close,
+		MarketDate:        latest.Date,
+		Reason:            reason,
+		Plan:              planForBucket(bucket, action, shortMA, longMA, avgVolume),
 	}, nil
 }
 
-func scoreCandidate(closePrice float64, shortMA float64, longMA float64, avgVolume float64) (float64, float64, float64, float64, float64) {
+func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64, float64, float64, float64, float64, float64, float64, float64, float64) {
+	if len(bars) < longWindow {
+		return 0, 0, 0, 0, 0, 0, 0, 0, 0
+	}
+	closes := make([]float64, 0, len(bars))
+	volumes := make([]float64, 0, len(bars))
+	for _, bar := range bars {
+		closes = append(closes, bar.Close)
+		volumes = append(volumes, bar.Volume)
+	}
+	latest := bars[len(bars)-1]
+	shortMA := average(closes[len(closes)-shortWindow:])
+	longMA := average(closes[len(closes)-longWindow:])
+	avgVolume := average(volumes[len(volumes)-longWindow:])
+
 	trendScore := 0.0
 	if longMA > 0 {
 		trendScore = (shortMA - longMA) / longMA
@@ -3478,17 +3971,144 @@ func scoreCandidate(closePrice float64, shortMA float64, longMA float64, avgVolu
 
 	structureScore := 0.0
 	if shortMA > 0 {
-		structureScore = (closePrice - shortMA) / shortMA
+		structureScore = (latest.Close - shortMA) / shortMA
+	}
+
+	momentumScore := 0.0
+	baseClose := bars[len(bars)-longWindow].Close
+	if baseClose > 0 {
+		momentumScore = clampFloat(latest.Close/baseClose-1, -0.12, 0.12) * 0.35
+	}
+
+	persistenceScore := 0.0
+	if longWindow > 1 {
+		windowBars := bars[len(bars)-longWindow:]
+		positiveDays := 0
+		aboveLongDays := 0
+		for i, bar := range windowBars {
+			if bar.Close >= longMA {
+				aboveLongDays++
+			}
+			if i > 0 && bar.Close > windowBars[i-1].Close {
+				positiveDays++
+			}
+		}
+		upRatio := float64(positiveDays) / float64(len(windowBars)-1)
+		aboveRatio := float64(aboveLongDays) / float64(len(windowBars))
+		persistenceScore = ((upRatio+aboveRatio)/2.0 - 0.5) * 0.10
+	}
+
+	breakoutScore := 0.0
+	highestClose := closes[len(closes)-longWindow]
+	for _, closePrice := range closes[len(closes)-longWindow:] {
+		if closePrice > highestClose {
+			highestClose = closePrice
+		}
+	}
+	if highestClose > 0 {
+		breakoutGap := latest.Close/highestClose - 1
+		if breakoutGap >= -0.01 {
+			breakoutScore = clampFloat(breakoutGap+0.01, 0, 0.03)
+		}
+	}
+
+	volumeTrendScore := 0.0
+	recentVolumeWindow := min(3, len(volumes))
+	recentAvgVolume := average(volumes[len(volumes)-recentVolumeWindow:])
+	if avgVolume > 0 {
+		volumeRatio := recentAvgVolume/avgVolume - 1
+		volumeTrendScore = clampFloat(volumeRatio, -0.30, 0.50) * 0.08
 	}
 
 	riskPenalty := 0.0
 	stopLine := longMA * 0.97
-	if stopLine > 0 && closePrice < stopLine {
-		riskPenalty = (stopLine - closePrice) / stopLine
+	if stopLine > 0 && latest.Close < stopLine {
+		riskPenalty = (stopLine - latest.Close) / stopLine
 	}
 
-	total := trendScore + liquidityScore + structureScore - riskPenalty
-	return trendScore, liquidityScore, structureScore, riskPenalty, total
+	total := trendScore + liquidityScore + structureScore + momentumScore + persistenceScore + breakoutScore + volumeTrendScore - riskPenalty
+	return trendScore, liquidityScore, structureScore, momentumScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty, total
+}
+
+func evaluateStrategyEnsemble(bars []marketBar, shortMA float64, longMA float64, avgVolume float64, shortReturn float64, mediumReturn float64, dataSource string, sourceErr string, portfolio portfolioConfig) (string, float64, string, string, string) {
+	latest := bars[len(bars)-1]
+	recentVolumeWindow := min(3, len(bars))
+	recentVolumeSum := 0.0
+	for _, bar := range bars[len(bars)-recentVolumeWindow:] {
+		recentVolumeSum += bar.Volume
+	}
+	recentAvgVolume := recentVolumeSum / float64(recentVolumeWindow)
+
+	buyVotes := 0
+	sellVotes := 0
+	votes := make([]string, 0, 3)
+
+	if portfolio.TrendStrategyEnabled {
+		if shortMA > longMA {
+			buyVotes += int(portfolio.TrendStrategyWeight * 100)
+			votes = append(votes, fmt.Sprintf("trend=BUY(%.2f)", portfolio.TrendStrategyWeight))
+		} else if shortMA < longMA {
+			sellVotes += int(portfolio.TrendStrategyWeight * 100)
+			votes = append(votes, fmt.Sprintf("trend=SELL(%.2f)", portfolio.TrendStrategyWeight))
+		} else {
+			votes = append(votes, fmt.Sprintf("trend=HOLD(%.2f)", portfolio.TrendStrategyWeight))
+		}
+	} else {
+		votes = append(votes, "trend=OFF")
+	}
+
+	lookback := min(20, len(bars)-1)
+	if lookback > 0 {
+		prevHigh := bars[len(bars)-1-lookback].Close
+		prevLow := bars[len(bars)-1-lookback].Close
+		for _, bar := range bars[len(bars)-1-lookback : len(bars)-1] {
+			if bar.Close > prevHigh {
+				prevHigh = bar.Close
+			}
+			if bar.Close < prevLow {
+				prevLow = bar.Close
+			}
+		}
+		if !portfolio.BreakoutEnabled {
+			votes = append(votes, "breakout=OFF")
+		} else if latest.Close >= prevHigh*0.995 && recentAvgVolume > avgVolume*1.05 {
+			buyVotes += int(portfolio.BreakoutStrategyWeight * 100)
+			votes = append(votes, fmt.Sprintf("breakout=BUY(%.2f)", portfolio.BreakoutStrategyWeight))
+		} else if latest.Close <= prevLow*1.01 && recentAvgVolume > avgVolume*1.05 {
+			sellVotes += int(portfolio.BreakoutStrategyWeight * 100)
+			votes = append(votes, fmt.Sprintf("breakout=SELL(%.2f)", portfolio.BreakoutStrategyWeight))
+		} else {
+			votes = append(votes, fmt.Sprintf("breakout=HOLD(%.2f)", portfolio.BreakoutStrategyWeight))
+		}
+	}
+
+	if !portfolio.PullbackEnabled {
+		votes = append(votes, "pullback=OFF")
+	} else if shortMA > longMA && mediumReturn > 0.03 && latest.Close >= shortMA*0.99 && latest.Close <= shortMA*1.05 {
+		buyVotes += int(portfolio.PullbackStrategyWeight * 100)
+		votes = append(votes, fmt.Sprintf("pullback=BUY(%.2f)", portfolio.PullbackStrategyWeight))
+	} else if latest.Close < longMA*0.98 && shortReturn < -0.03 {
+		sellVotes += int(portfolio.PullbackStrategyWeight * 100)
+		votes = append(votes, fmt.Sprintf("pullback=SELL(%.2f)", portfolio.PullbackStrategyWeight))
+	} else {
+		votes = append(votes, fmt.Sprintf("pullback=HOLD(%.2f)", portfolio.PullbackStrategyWeight))
+	}
+
+	action := "HOLD"
+	reason := buildReasonWithSource("multi-strategy votes are neutral", withSourceSuffix(dataSource, sourceErr))
+	trigger := fmt.Sprintf("Watch %.2f for a confirmed multi-strategy breakout", shortMA)
+	if buyVotes > sellVotes && buyVotes > 0 {
+		action = "BUY"
+		reason = buildReasonWithSource("multi-strategy alignment turned positive", withSourceSuffix(dataSource, sourceErr))
+		trigger = fmt.Sprintf("Hold above %.2f with follow-through volume", shortMA)
+	} else if sellVotes > buyVotes && sellVotes > 0 {
+		action = "SELL"
+		reason = buildReasonWithSource("multi-strategy alignment turned negative", withSourceSuffix(dataSource, sourceErr))
+		trigger = fmt.Sprintf("Only reassess if price retakes %.2f", longMA)
+	}
+
+	alignment := float64(buyVotes-sellVotes) / 100.0 * 0.04
+	return action, alignment, strings.Join(votes, " | "), reason, trigger
 }
 
 func bucketPriority(bucket string) int {
@@ -3719,12 +4339,21 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
-		fmt.Fprintf(builder, "   Score Breakdown: trend %.4f | liquidity %.4f | structure %.4f | risk_penalty %.4f\n",
+		fmt.Fprintf(builder, "   Score Breakdown: trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | risk_penalty %.4f\n",
 			candidate.TrendScore,
 			candidate.LiquidityScore,
 			candidate.StructureScore,
+			candidate.MomentumScore,
+			candidate.PersistenceScore,
+			candidate.BreakoutScore,
+			candidate.VolumeTrendScore,
+			candidate.RotationScore,
+			candidate.StrategyAlignment,
 			candidate.RiskPenalty,
 		)
+		if candidate.StrategyVotes != "" {
+			fmt.Fprintf(builder, "   Strategy Votes: %s\n", candidate.StrategyVotes)
+		}
 		fmt.Fprintf(builder, "   Avg Volume: %.0f\n", candidate.AvgVolume)
 		fmt.Fprintf(builder, "   Short/Long MA: %.2f / %.2f\n", candidate.ShortMA, candidate.LongMA)
 		fmt.Fprintf(builder, "   Close: %.2f\n", candidate.ClosePrice)
@@ -3786,7 +4415,7 @@ func buildBucketRows(candidates []scanCandidate) string {
 				candidate.BacktestTrades,
 			)
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>T %.4f | L %.4f | S %.4f | R %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small>%s</td><td>%s</td><td>%s</td></tr>`,
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>T %.4f | L %.4f | S %.4f | M %.4f | P %.4f | B %.4f | V %.4f | Rot %.4f | Strat %.4f | R %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small><br><small>%s</small>%s</td><td>%s</td><td>%s</td></tr>`,
 			i+1,
 			html.EscapeString(candidate.Symbol),
 			html.EscapeString(candidate.Name),
@@ -3797,6 +4426,12 @@ func buildBucketRows(candidates []scanCandidate) string {
 			candidate.TrendScore,
 			candidate.LiquidityScore,
 			candidate.StructureScore,
+			candidate.MomentumScore,
+			candidate.PersistenceScore,
+			candidate.BreakoutScore,
+			candidate.VolumeTrendScore,
+			candidate.RotationScore,
+			candidate.StrategyAlignment,
 			candidate.RiskPenalty,
 			candidate.AvgVolume,
 			candidate.ShortMA,
@@ -3805,6 +4440,7 @@ func buildBucketRows(candidates []scanCandidate) string {
 			html.EscapeString(candidate.Reason),
 			html.EscapeString(candidate.Trigger),
 			candidate.TriggerPrice,
+			html.EscapeString(candidate.StrategyVotes),
 			avoidTags,
 			backtestCell,
 			html.EscapeString(candidate.Plan),
