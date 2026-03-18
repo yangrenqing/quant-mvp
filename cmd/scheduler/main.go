@@ -23,6 +23,14 @@ import (
 const configPath = "configs/config.yaml"
 const reportsDir = "reports"
 const aShareUniversePath = "data/a_share_universe.csv"
+const cacheDir = "data/cache"
+
+type marketKind string
+
+const (
+	marketKindAShare marketKind = "a_share"
+	marketKindUS     marketKind = "us"
+)
 
 type config struct {
 	AppName  string
@@ -38,6 +46,7 @@ type dbConfig struct {
 
 type scheduleConfig struct {
 	DailyRun string
+	CacheTTL string
 }
 
 type strategyConfig struct {
@@ -96,6 +105,10 @@ type scanCandidate struct {
 	Action             string
 	Bucket             string
 	Score              float64
+	TrendScore         float64
+	LiquidityScore     float64
+	StructureScore     float64
+	RiskPenalty        float64
 	AvgVolume          float64
 	Trigger            string
 	TriggerPrice       float64
@@ -117,6 +130,7 @@ type scanCandidate struct {
 	BacktestDrawdown   float64
 	BacktestWinRate    float64
 	BacktestTrades     int
+	InPortfolio        bool
 }
 
 type backtestTrade struct {
@@ -155,6 +169,45 @@ type backtestResult struct {
 	EquityCurve       []backtestTrade
 }
 
+type portfolioHolding struct {
+	Symbol string
+	Name   string
+	Shares int
+}
+
+type portfolioSnapshot struct {
+	Date     string
+	Equity   float64
+	Cash     float64
+	Holdings []portfolioHolding
+}
+
+type portfolioBacktestResult struct {
+	FromDate         string
+	ToDate           string
+	InitialCash      float64
+	FinalEquity      float64
+	TotalReturn      float64
+	AnnualizedReturn float64
+	BenchmarkReturn  float64
+	ExcessReturn     float64
+	MaxDrawdown      float64
+	Mode             string
+	FeeBps           float64
+	SlippageBps      float64
+	RebalanceCount   int
+	TradingDays      int
+	Positions        int
+	Snapshots        []portfolioSnapshot
+	LatestSelection  []scanCandidate
+	CurrentHoldings  []portfolioHolding
+}
+
+type marketSeries struct {
+	meta aShareSymbol
+	bars []marketBar
+}
+
 func main() {
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 	symbolOverride := flag.String("symbol", "", "Override the configured symbol for this run")
@@ -163,6 +216,7 @@ func main() {
 	topN := flag.Int("top", 10, "Number of candidates to keep in the A-share scan report")
 	backtest := flag.Bool("backtest", false, "Run a single-symbol backtest")
 	backtestScan := flag.Bool("backtest-scan", false, "Run a backtest across the local A-share universe")
+	portfolioBacktest := flag.Bool("portfolio-backtest", false, "Run a portfolio backtest across the local A-share universe")
 	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
 	toDate := flag.String("to", "", "Backtest end date in YYYY-MM-DD")
 	initialCash := flag.Float64("cash", 100000, "Backtest initial cash")
@@ -183,6 +237,9 @@ func main() {
 	}
 	if err := os.MkdirAll(reportsDir, 0o755); err != nil {
 		logger.Fatalf("ensure reports dir: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		logger.Fatalf("ensure cache dir: %v", err)
 	}
 	if *backtest {
 		if strings.TrimSpace(cfg.Strategy.Symbol) == "" {
@@ -213,6 +270,20 @@ func main() {
 			logger.Fatalf("write batch backtest reports: %v", err)
 		}
 		fmt.Printf("Batch backtest complete. %d results written to %s and %s\n\n", len(results), filepath.Join(reportsDir, "backtest_scan.txt"), filepath.Join(reportsDir, "backtest_scan.html"))
+		return
+	}
+	if *portfolioBacktest {
+		if *fromDate == "" || *toDate == "" {
+			logger.Fatalf("portfolio backtest requires --from and --to")
+		}
+		result, err := runPortfolioBacktest(cfg.Strategy, cfg.Risk, *fromDate, *toDate, *initialCash, *feeBps, *slippageBps, *topN)
+		if err != nil {
+			logger.Fatalf("portfolio backtest failed: %v", err)
+		}
+		if err := writePortfolioBacktestReports(result); err != nil {
+			logger.Fatalf("write portfolio backtest reports: %v", err)
+		}
+		printPortfolioBacktestSummary(result)
 		return
 	}
 	if *scanAShare {
@@ -261,17 +332,11 @@ func runAShareScan(strategy strategyConfig, topN int) error {
 		return err
 	}
 	backtestSnapshot, _ := loadBacktestSnapshot(filepath.Join(reportsDir, "backtest_scan.csv"))
+	portfolioSnapshot, _ := loadPortfolioHoldingsSnapshot(filepath.Join(reportsDir, "portfolio_backtest.csv"))
 
 	candidates := make([]scanCandidate, 0, len(symbols))
 	for _, symbol := range symbols {
-		bars, err := loadBarsFromTushare(symbol.Symbol, os.Getenv("TUSHARE_TOKEN"))
-		dataSource := "tushare"
-		sourceErr := ""
-		if err != nil {
-			sourceErr = err.Error()
-			bars, err = loadBarsFromBaoStock(symbol.Symbol)
-			dataSource = "baostock"
-		}
+		bars, dataSource, sourceErr, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
 		if err != nil || len(bars) < strategy.LongWindow {
 			continue
 		}
@@ -282,6 +347,9 @@ func runAShareScan(strategy strategyConfig, topN int) error {
 		}
 		if metrics, ok := backtestSnapshot[candidate.Symbol]; ok {
 			applyBacktestMetrics(&candidate, metrics)
+		}
+		if portfolioSnapshot[candidate.Symbol] {
+			candidate.InPortfolio = true
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -332,13 +400,10 @@ func runBatchBacktest(strategy strategyConfig, risk riskConfig, fromDate string,
 
 	results := make([]backtestResult, 0, len(symbols))
 	for _, symbol := range symbols {
-		bars, err := loadBarsFromBaoStock(symbol.Symbol)
-		mode := "live"
+		bars, dataSource, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+		mode := modeFromDataSource(dataSource)
 		if err != nil {
-			bars, err = loadBarsFromTushare(symbol.Symbol, os.Getenv("TUSHARE_TOKEN"))
-			if err != nil {
-				continue
-			}
+			continue
 		}
 
 		result, err := simulateBacktest(symbol.Symbol, symbol.Name, bars, mode, strategy.ShortWindow, strategy.LongWindow, risk, fromDate, toDate, initialCash, feeBps, slippageBps)
@@ -363,6 +428,255 @@ func runBatchBacktest(strategy strategyConfig, risk riskConfig, fromDate string,
 		results = results[:topN]
 	}
 	return results, nil
+}
+
+func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64, topN int) (portfolioBacktestResult, error) {
+	symbols, err := loadAShareUniverse()
+	if err != nil {
+		return portfolioBacktestResult{}, err
+	}
+	if topN <= 0 {
+		topN = 5
+	}
+
+	series := make([]marketSeries, 0, len(symbols))
+	mode := "live"
+	for _, symbol := range symbols {
+		bars, dataSource, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+		if err != nil {
+			continue
+		}
+		if modeFromDataSource(dataSource) == "test" {
+			mode = "test"
+		}
+		series = append(series, marketSeries{meta: symbol, bars: bars})
+	}
+	if len(series) == 0 {
+		return portfolioBacktestResult{}, errors.New("no market data available for portfolio backtest")
+	}
+
+	dates := tradingDatesInRange(series[0].bars, fromDate, toDate)
+	if len(dates) == 0 {
+		return portfolioBacktestResult{}, errors.New("no trading dates available in requested range")
+	}
+
+	barBySymbolDate := make(map[string]map[string]marketBar, len(series))
+	for _, item := range series {
+		dateMap := make(map[string]marketBar, len(item.bars))
+		for _, bar := range item.bars {
+			dateMap[bar.Date] = bar
+		}
+		barBySymbolDate[item.meta.Symbol] = dateMap
+	}
+
+	feeRate := feeBps / 10000
+	slippageRate := slippageBps / 10000
+	cash := initialCash
+	holdings := map[string]int{}
+	snapshots := make([]portfolioSnapshot, 0, len(dates))
+	peakEquity := initialCash
+	maxDrawdown := 0.0
+	rebalanceCount := 0
+	latestSelection := make([]scanCandidate, 0)
+	const rebalanceInterval = 5
+	const weightDriftThreshold = 0.20
+
+	for dayIdx, date := range dates {
+		candidates := make([]scanCandidate, 0, len(series))
+		for _, item := range series {
+			history := barsUpToDate(item.bars, date)
+			if len(history) < strategy.LongWindow {
+				continue
+			}
+			candidate, err := rankCandidate(item.meta.Symbol, item.meta.Name, item.meta.Industry, history, "baostock", "", strategy)
+			if err != nil {
+				continue
+			}
+			if candidate.Score > 0 && candidate.Bucket != "回避" {
+				candidates = append(candidates, candidate)
+			}
+		}
+
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].Score > candidates[j].Score
+		})
+		if len(candidates) > topN {
+			candidates = candidates[:topN]
+		}
+		if len(candidates) > 0 {
+			latestSelection = append([]scanCandidate(nil), candidates...)
+		}
+
+		targetSet := make(map[string]scanCandidate, len(candidates))
+		for _, candidate := range candidates {
+			targetSet[candidate.Symbol] = candidate
+		}
+
+		dayEquity := cash
+		for symbol, shares := range holdings {
+			if shares <= 0 {
+				continue
+			}
+			bar, ok := barBySymbolDate[symbol][date]
+			if !ok {
+				continue
+			}
+			dayEquity += float64(shares) * bar.Close
+		}
+
+		shouldRebalance := dayIdx == 0 || dayIdx%rebalanceInterval == 0
+
+		// Always remove names that dropped out of the target set.
+		for symbol, shares := range holdings {
+			if shares <= 0 {
+				continue
+			}
+			if _, keep := targetSet[symbol]; keep {
+				continue
+			}
+			bar, ok := barBySymbolDate[symbol][date]
+			if !ok {
+				continue
+			}
+			execPrice := bar.Close * (1 - slippageRate)
+			fee := float64(shares) * execPrice * feeRate
+			cash += float64(shares)*execPrice - fee
+			holdings[symbol] = 0
+			rebalanceCount++
+		}
+
+		if len(candidates) > 0 && shouldRebalance {
+			targetValue := cash
+			for symbol, shares := range holdings {
+				if shares <= 0 {
+					continue
+				}
+				if bar, ok := barBySymbolDate[symbol][date]; ok {
+					targetValue += float64(shares) * bar.Close
+				}
+			}
+			slotValue := targetValue / float64(len(candidates))
+
+			for _, candidate := range candidates {
+				bar, ok := barBySymbolDate[candidate.Symbol][date]
+				if !ok {
+					continue
+				}
+				currentShares := holdings[candidate.Symbol]
+				currentValue := float64(currentShares) * bar.Close
+				targetShares := int(slotValue / (bar.Close * (1 + feeRate + slippageRate)))
+				if targetShares < 0 {
+					targetShares = 0
+				}
+				targetValueForName := float64(targetShares) * bar.Close
+				drift := 1.0
+				if targetValueForName > 0 {
+					drift = math.Abs(currentValue-targetValueForName) / targetValueForName
+				}
+				if currentShares > 0 && drift < weightDriftThreshold {
+					continue
+				}
+				diff := targetShares - currentShares
+				if diff == 0 {
+					continue
+				}
+
+				if diff < 0 {
+					sellShares := -diff
+					execPrice := bar.Close * (1 - slippageRate)
+					fee := float64(sellShares) * execPrice * feeRate
+					cash += float64(sellShares)*execPrice - fee
+					holdings[candidate.Symbol] = currentShares - sellShares
+					rebalanceCount++
+					continue
+				}
+
+				execPrice := bar.Close * (1 + slippageRate)
+				cost := float64(diff) * execPrice
+				fee := cost * feeRate
+				if cost+fee > cash {
+					maxAffordable := int(cash / (execPrice * (1 + feeRate)))
+					diff = maxAffordable
+					if diff <= 0 {
+						continue
+					}
+					cost = float64(diff) * execPrice
+					fee = cost * feeRate
+				}
+				cash -= cost + fee
+				holdings[candidate.Symbol] = currentShares + diff
+				rebalanceCount++
+			}
+		}
+
+		holdingsList := make([]portfolioHolding, 0)
+		equity := cash
+		for _, item := range series {
+			shares := holdings[item.meta.Symbol]
+			if shares <= 0 {
+				continue
+			}
+			bar, ok := barBySymbolDate[item.meta.Symbol][date]
+			if !ok {
+				continue
+			}
+			equity += float64(shares) * bar.Close
+			holdingsList = append(holdingsList, portfolioHolding{
+				Symbol: item.meta.Symbol,
+				Name:   item.meta.Name,
+				Shares: shares,
+			})
+		}
+		sort.Slice(holdingsList, func(i, j int) bool { return holdingsList[i].Symbol < holdingsList[j].Symbol })
+		snapshots = append(snapshots, portfolioSnapshot{
+			Date:     date,
+			Equity:   equity,
+			Cash:     cash,
+			Holdings: holdingsList,
+		})
+
+		if equity > peakEquity {
+			peakEquity = equity
+		}
+		if peakEquity > 0 {
+			drawdown := (peakEquity - equity) / peakEquity
+			if drawdown > maxDrawdown {
+				maxDrawdown = drawdown
+			}
+		}
+	}
+
+	if len(snapshots) == 0 {
+		return portfolioBacktestResult{}, errors.New("portfolio backtest produced no snapshots")
+	}
+
+	finalEquity := snapshots[len(snapshots)-1].Equity
+	currentHoldings := snapshots[len(snapshots)-1].Holdings
+	benchmarkReturn := 0.0
+	if len(latestSelection) > 0 {
+		benchmarkReturn = averageBenchmarkReturn(latestSelection, fromDate, toDate, series, initialCash, feeRate, slippageRate)
+	}
+
+	return portfolioBacktestResult{
+		FromDate:         fromDate,
+		ToDate:           toDate,
+		InitialCash:      initialCash,
+		FinalEquity:      finalEquity,
+		TotalReturn:      (finalEquity - initialCash) / initialCash,
+		AnnualizedReturn: annualizeReturn(finalEquity/initialCash, len(snapshots)),
+		BenchmarkReturn:  benchmarkReturn,
+		ExcessReturn:     ((finalEquity - initialCash) / initialCash) - benchmarkReturn,
+		MaxDrawdown:      maxDrawdown,
+		Mode:             mode,
+		FeeBps:           feeBps,
+		SlippageBps:      slippageBps,
+		RebalanceCount:   rebalanceCount,
+		TradingDays:      len(snapshots),
+		Positions:        topN,
+		Snapshots:        snapshots,
+		LatestSelection:  latestSelection,
+		CurrentHoldings:  currentHoldings,
+	}, nil
 }
 
 func simulateBacktest(symbol string, name string, bars []marketBar, mode string, shortWindow int, longWindow int, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
@@ -562,6 +876,51 @@ func annualizeReturn(growth float64, tradingDays int) float64 {
 		return 0
 	}
 	return math.Pow(growth, 252.0/float64(tradingDays)) - 1
+}
+
+func tradingDatesInRange(bars []marketBar, fromDate string, toDate string) []string {
+	dates := make([]string, 0, len(bars))
+	for _, bar := range bars {
+		if bar.Date >= fromDate && bar.Date <= toDate {
+			dates = append(dates, bar.Date)
+		}
+	}
+	return dates
+}
+
+func barsUpToDate(bars []marketBar, date string) []marketBar {
+	idx := sort.Search(len(bars), func(i int) bool { return bars[i].Date > date })
+	return bars[:idx]
+}
+
+func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate string, series []marketSeries, initialCash float64, feeRate float64, slippageRate float64) float64 {
+	if len(selection) == 0 {
+		return 0
+	}
+	seriesMap := make(map[string][]marketBar, len(series))
+	for _, item := range series {
+		seriesMap[item.meta.Symbol] = item.bars
+	}
+
+	values := make([]float64, 0, len(selection))
+	for _, candidate := range selection {
+		bars := seriesMap[candidate.Symbol]
+		filtered := make([]marketBar, 0, len(bars))
+		for _, bar := range bars {
+			if bar.Date >= fromDate && bar.Date <= toDate {
+				filtered = append(filtered, bar)
+			}
+		}
+		if len(filtered) == 0 {
+			continue
+		}
+		_, ret, _ := simulateBuyAndHoldBenchmark(filtered, initialCash, feeRate, slippageRate)
+		values = append(values, ret)
+	}
+	if len(values) == 0 {
+		return 0
+	}
+	return average(values)
 }
 
 func printBacktestSummary(result backtestResult) {
@@ -841,6 +1200,172 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 	return nil
 }
 
+func printPortfolioBacktestSummary(result portfolioBacktestResult) {
+	fmt.Printf(
+		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\n\n",
+		result.FromDate,
+		result.ToDate,
+		result.Mode,
+		result.Positions,
+		result.InitialCash,
+		result.FinalEquity,
+		result.TotalReturn*100,
+		result.AnnualizedReturn*100,
+		result.BenchmarkReturn*100,
+		result.ExcessReturn*100,
+		result.MaxDrawdown*100,
+		result.RebalanceCount,
+		result.TradingDays,
+	)
+}
+
+func writePortfolioBacktestReports(result portfolioBacktestResult) error {
+	textPath := filepath.Join(reportsDir, "portfolio_backtest.txt")
+	htmlPath := filepath.Join(reportsDir, "portfolio_backtest.html")
+	csvPath := filepath.Join(reportsDir, "portfolio_backtest.csv")
+
+	var latest strings.Builder
+	for i, candidate := range result.LatestSelection {
+		fmt.Fprintf(&latest, "%d. %s %s score=%.4f close=%.2f\n", i+1, candidate.Symbol, candidate.Name, candidate.Score, candidate.ClosePrice)
+	}
+	if latest.Len() == 0 {
+		latest.WriteString("No active selection\n")
+	}
+
+	var curve []backtestTrade
+	for _, snapshot := range result.Snapshots {
+		curve = append(curve, backtestTrade{Date: snapshot.Date, Equity: snapshot.Equity})
+	}
+	svg := buildEquityCurveSVG(curve)
+
+	lastHoldings := "None"
+	if len(result.Snapshots) > 0 && len(result.Snapshots[len(result.Snapshots)-1].Holdings) > 0 {
+		names := make([]string, 0, len(result.Snapshots[len(result.Snapshots)-1].Holdings))
+		for _, holding := range result.Snapshots[len(result.Snapshots)-1].Holdings {
+			names = append(names, fmt.Sprintf("%s %s x%d", holding.Symbol, holding.Name, holding.Shares))
+		}
+		lastHoldings = strings.Join(names, "; ")
+	}
+
+	textContent := fmt.Sprintf(
+		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\n\nLatest selection\n%s",
+		result.FromDate,
+		result.ToDate,
+		result.Mode,
+		result.Positions,
+		result.InitialCash,
+		result.FinalEquity,
+		result.TotalReturn*100,
+		result.AnnualizedReturn*100,
+		result.BenchmarkReturn*100,
+		result.ExcessReturn*100,
+		result.MaxDrawdown*100,
+		result.RebalanceCount,
+		result.TradingDays,
+		lastHoldings,
+		latest.String(),
+	)
+
+	var selectionRows strings.Builder
+	if len(result.LatestSelection) == 0 {
+		selectionRows.WriteString(`<tr><td colspan="5">No active selection</td></tr>`)
+	} else {
+		for i, candidate := range result.LatestSelection {
+			fmt.Fprintf(&selectionRows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%.4f</td><td>%.2f</td></tr>`,
+				i+1,
+				html.EscapeString(candidate.Symbol),
+				html.EscapeString(candidate.Name),
+				candidate.Score,
+				candidate.ClosePrice,
+			)
+		}
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portfolio Backtest</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1 { margin: 0 0 16px; font-size: 36px; }
+    .meta { line-height: 1.8; color: #6d6559; }
+    table { width: 100%%; border-collapse: collapse; margin-top: 18px; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6d6559; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Portfolio Backtest</h1>
+      <div class="meta">
+        <div>Range: %s to %s</div>
+        <div>Mode: %s</div>
+        <div>Positions: %d</div>
+        <div>Initial cash: %.2f</div>
+        <div>Final equity: %.2f</div>
+        <div>Total return: %.2f%%</div>
+        <div>Annualized return: %.2f%%</div>
+        <div>Benchmark return: %.2f%%</div>
+        <div>Excess return: %.2f%%</div>
+        <div>Max drawdown: %.2f%%</div>
+        <div>Rebalances: %d</div>
+        <div>Trading days: %d</div>
+        <div>Current holdings: %s</div>
+      </div>
+      <div style="margin-top:18px">%s</div>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>Name</th><th>Score</th><th>Close</th></tr>
+        </thead>
+        <tbody>%s</tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`,
+		html.EscapeString(result.FromDate),
+		html.EscapeString(result.ToDate),
+		html.EscapeString(result.Mode),
+		result.Positions,
+		result.InitialCash,
+		result.FinalEquity,
+		result.TotalReturn*100,
+		result.AnnualizedReturn*100,
+		result.BenchmarkReturn*100,
+		result.ExcessReturn*100,
+		result.MaxDrawdown*100,
+		result.RebalanceCount,
+		result.TradingDays,
+		html.EscapeString(lastHoldings),
+		svg,
+		selectionRows.String(),
+	)
+
+	if err := os.WriteFile(textPath, []byte(textContent), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	csvRows := [][]string{{"symbol", "name", "shares"}}
+	for _, holding := range result.CurrentHoldings {
+		csvRows = append(csvRows, []string{
+			holding.Symbol,
+			holding.Name,
+			strconv.Itoa(holding.Shares),
+		})
+	}
+	if err := writeCSVFile(csvPath, csvRows); err != nil {
+		return err
+	}
+	return nil
+}
+
 func buildEquityCurveSVG(curve []backtestTrade) string {
 	if len(curve) == 0 {
 		return ""
@@ -955,6 +1480,38 @@ func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
 	return results, nil
 }
 
+func loadPortfolioHoldingsSnapshot(path string) (map[string]bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < 2 {
+		return map[string]bool{}, nil
+	}
+
+	results := make(map[string]bool, len(rows)-1)
+	for _, row := range rows[1:] {
+		if len(row) == 0 {
+			continue
+		}
+		symbol := strings.TrimSpace(row[0])
+		if symbol == "" {
+			continue
+		}
+		results[symbol] = true
+	}
+	return results, nil
+}
+
 func applyBacktestMetrics(candidate *scanCandidate, metrics backtestResult) {
 	candidate.HasBacktest = true
 	candidate.BacktestMode = metrics.Mode
@@ -1017,6 +1574,9 @@ func loadConfig(path string) (config, error) {
 			if key == "daily_run" {
 				cfg.Schedule.DailyRun = value
 			}
+			if key == "cache_ttl" {
+				cfg.Schedule.CacheTTL = value
+			}
 		case "strategy":
 			switch key {
 			case "name":
@@ -1074,6 +1634,9 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Schedule.DailyRun == "" {
 		return config{}, errors.New("schedule.daily_run is required")
+	}
+	if cfg.Schedule.CacheTTL == "" {
+		cfg.Schedule.CacheTTL = "4h"
 	}
 	if cfg.Strategy.Name == "" {
 		cfg.Strategy.Name = "sma-crossover"
@@ -1344,89 +1907,183 @@ func evaluateSignal(dbPath string, strategy strategyConfig, risk riskConfig) (st
 }
 
 func loadBars(strategy strategyConfig) ([]marketBar, string, string, error) {
-	switch strings.ToLower(strategy.DataSource) {
-	case "auto":
-		if isAShareSymbol(strategy.Symbol) {
-			bars, err := loadBarsFromBaoStock(strategy.Symbol)
-			if err == nil {
-				return bars, "baostock", "", nil
-			}
-			bars, backupErr := loadBarsFromTushare(strategy.Symbol, os.Getenv("TUSHARE_TOKEN"))
-			if backupErr == nil {
-				return bars, "tushare", err.Error(), nil
-			}
-			if strategy.DataPath == "" {
-				return nil, "", "", err
-			}
+	return loadSymbolBars(strategy.Symbol, strategy.DataSource, strategy.DataPath, strategy.APIKeyEnv, true)
+}
 
-			bars, csvErr := loadBarsFromCSV(strategy.DataPath)
-			if csvErr != nil {
-				return nil, "", "", fmt.Errorf("baostock failed: %v; tushare failed: %v; csv fallback failed: %w", err, backupErr, csvErr)
+func loadSymbolBars(symbol string, dataSource string, dataPath string, apiKeyEnv string, allowCSVFallback bool) ([]marketBar, string, string, error) {
+	switch strings.ToLower(dataSource) {
+	case "auto":
+		if isAShareSymbol(symbol) {
+			bars, source, sourceErr, err := loadAShareBars(symbol)
+			if err == nil {
+				return bars, source, sourceErr, nil
 			}
-			return bars, "csv", err.Error(), nil
+			if allowCSVFallback && dataPath != "" {
+				csvBars, csvErr := loadBarsFromCSV(dataPath)
+				if csvErr == nil {
+					return csvBars, "csv", err.Error(), nil
+				}
+				return nil, "", "", fmt.Errorf("a-share providers failed: %v; csv fallback failed: %w", err, csvErr)
+			}
+			return nil, "", "", err
 		}
 
-		bars, err := loadBarsFromAlphaVantage(strategy.Symbol, os.Getenv(strategy.APIKeyEnv))
+		bars, err := loadCachedProviderBars("alphavantage", symbol, func() ([]marketBar, error) {
+			return loadBarsFromAlphaVantage(symbol, os.Getenv(apiKeyEnv))
+		})
 		if err == nil {
 			return bars, "alphavantage", "", nil
 		}
-		if strategy.DataPath == "" {
-			return nil, "", "", err
-		}
-
-		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
-		if csvErr != nil {
+		if allowCSVFallback && dataPath != "" {
+			csvBars, csvErr := loadBarsFromCSV(dataPath)
+			if csvErr == nil {
+				return csvBars, "csv", err.Error(), nil
+			}
 			return nil, "", "", fmt.Errorf("alphavantage failed: %v; csv fallback failed: %w", err, csvErr)
 		}
-		return bars, "csv", err.Error(), nil
+		return nil, "", "", err
 	case "tushare":
-		bars, err := loadBarsFromTushare(strategy.Symbol, os.Getenv("TUSHARE_TOKEN"))
+		bars, source, sourceErr, err := loadAShareBarsWithPrimary(symbol, "tushare")
 		if err == nil {
-			return bars, "tushare", "", nil
+			return bars, source, sourceErr, nil
 		}
-		if strategy.DataPath == "" {
-			return nil, "", "", err
-		}
-
-		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
-		if csvErr != nil {
+		if allowCSVFallback && dataPath != "" {
+			csvBars, csvErr := loadBarsFromCSV(dataPath)
+			if csvErr == nil {
+				return csvBars, "csv", err.Error(), nil
+			}
 			return nil, "", "", fmt.Errorf("tushare failed: %v; csv fallback failed: %w", err, csvErr)
 		}
-		return bars, "csv", err.Error(), nil
+		return nil, "", "", err
 	case "baostock":
-		bars, err := loadBarsFromBaoStock(strategy.Symbol)
+		bars, source, sourceErr, err := loadAShareBarsWithPrimary(symbol, "baostock")
 		if err == nil {
-			return bars, "baostock", "", nil
+			return bars, source, sourceErr, nil
 		}
-		if strategy.DataPath == "" {
-			return nil, "", "", err
-		}
-
-		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
-		if csvErr != nil {
+		if allowCSVFallback && dataPath != "" {
+			csvBars, csvErr := loadBarsFromCSV(dataPath)
+			if csvErr == nil {
+				return csvBars, "csv", err.Error(), nil
+			}
 			return nil, "", "", fmt.Errorf("baostock failed: %v; csv fallback failed: %w", err, csvErr)
 		}
-		return bars, "csv", err.Error(), nil
+		return nil, "", "", err
 	case "alphavantage":
-		bars, err := loadBarsFromAlphaVantage(strategy.Symbol, os.Getenv(strategy.APIKeyEnv))
+		bars, err := loadCachedProviderBars("alphavantage", symbol, func() ([]marketBar, error) {
+			return loadBarsFromAlphaVantage(symbol, os.Getenv(apiKeyEnv))
+		})
 		if err == nil {
 			return bars, "alphavantage", "", nil
 		}
-		if strategy.DataPath == "" {
-			return nil, "", "", err
-		}
-
-		bars, csvErr := loadBarsFromCSV(strategy.DataPath)
-		if csvErr != nil {
+		if allowCSVFallback && dataPath != "" {
+			csvBars, csvErr := loadBarsFromCSV(dataPath)
+			if csvErr == nil {
+				return csvBars, "csv", err.Error(), nil
+			}
 			return nil, "", "", fmt.Errorf("alphavantage failed: %v; csv fallback failed: %w", err, csvErr)
 		}
-		return bars, "csv", err.Error(), nil
+		return nil, "", "", err
 	case "csv":
-		bars, err := loadBarsFromCSV(strategy.DataPath)
+		bars, err := loadBarsFromCSV(dataPath)
 		return bars, "csv", "", err
+	default:
+		return nil, "", "", fmt.Errorf("unsupported data source %q", dataSource)
+	}
+}
+
+func loadAShareBars(symbol string) ([]marketBar, string, string, error) {
+	return loadAShareBarsWithPrimary(symbol, "baostock")
+}
+
+func loadAShareBarsWithPrimary(symbol string, primary string) ([]marketBar, string, string, error) {
+	type providerSpec struct {
+		name  string
+		fetch func() ([]marketBar, error)
 	}
 
-	return nil, "", "", fmt.Errorf("unsupported data source %q", strategy.DataSource)
+	providers := []providerSpec{
+		{
+			name: "baostock",
+			fetch: func() ([]marketBar, error) {
+				return loadBarsFromBaoStock(symbol)
+			},
+		},
+		{
+			name: "tushare",
+			fetch: func() ([]marketBar, error) {
+				return loadBarsFromTushare(symbol, os.Getenv("TUSHARE_TOKEN"))
+			},
+		},
+	}
+	if primary == "tushare" {
+		providers[0], providers[1] = providers[1], providers[0]
+	}
+
+	var errs []string
+	for idx, provider := range providers {
+		bars, err := loadCachedProviderBars(provider.name, symbol, provider.fetch)
+		if err == nil {
+			if idx == 0 {
+				return bars, provider.name, "", nil
+			}
+			return bars, provider.name, strings.Join(errs, "; "), nil
+		}
+		errs = append(errs, err.Error())
+	}
+
+	return nil, "", "", errors.New(strings.Join(errs, "; "))
+}
+
+func loadCachedProviderBars(provider string, symbol string, fetch func() ([]marketBar, error)) ([]marketBar, error) {
+	path := providerCachePath(provider, symbol)
+	if bars, fresh, err := loadCachedBars(path, 4*time.Hour); err == nil && fresh {
+		return bars, nil
+	}
+
+	bars, err := fetch()
+	if err == nil {
+		if writeErr := writeBarsCache(path, bars); writeErr != nil {
+			return bars, nil
+		}
+		return bars, nil
+	}
+
+	if bars, _, cacheErr := loadCachedBars(path, 365*24*time.Hour); cacheErr == nil && len(bars) > 0 {
+		return bars, nil
+	}
+	return nil, err
+}
+
+func providerCachePath(provider string, symbol string) string {
+	safeSymbol := strings.NewReplacer(".", "_", "/", "_", "\\", "_", " ", "_").Replace(strings.ToLower(symbol))
+	return filepath.Join(cacheDir, fmt.Sprintf("%s_%s.csv", provider, safeSymbol))
+}
+
+func loadCachedBars(path string, maxAge time.Duration) ([]marketBar, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, false, err
+	}
+	bars, err := loadBarsFromCSV(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return bars, time.Since(info.ModTime()) <= maxAge, nil
+}
+
+func writeBarsCache(path string, bars []marketBar) error {
+	rows := [][]string{{"timestamp", "open", "high", "low", "close", "volume"}}
+	for _, bar := range bars {
+		rows = append(rows, []string{
+			bar.Date,
+			fmt.Sprintf("%.6f", bar.Open),
+			fmt.Sprintf("%.6f", bar.High),
+			fmt.Sprintf("%.6f", bar.Low),
+			fmt.Sprintf("%.6f", bar.Close),
+			fmt.Sprintf("%.6f", bar.Volume),
+		})
+	}
+	return writeCSVFile(path, rows)
 }
 
 func withSourceSuffix(dataSource string, sourceErr string) string {
@@ -1483,19 +2140,20 @@ func planForAction(action string, hasPosition bool, mode string) string {
 }
 
 func printTradingPlan(signal strategySignal, now time.Time) {
+	nextTradeDate := nextTradingDateFromSignal(signal, now).Format("2006-01-02")
 	fmt.Printf(
 		"Mode: %s\nMarket date: %s\nSignal: %s\nReason: %s\nPlan for %s: %s\n\n",
 		signal.Mode,
 		signal.MarketDate,
 		signal.Action,
 		signal.Reason,
-		now.AddDate(0, 0, 1).Format("2006-01-02"),
+		nextTradeDate,
 		signal.Plan,
 	)
 }
 
 func writePlanReports(signal strategySignal, now time.Time) error {
-	reportDate := now.AddDate(0, 0, 1).Format("2006-01-02")
+	reportDate := nextTradingDateFromSignal(signal, now).Format("2006-01-02")
 	textPath := filepath.Join(reportsDir, "latest_plan.txt")
 	htmlPath := filepath.Join(reportsDir, "latest_plan.html")
 
@@ -1605,6 +2263,58 @@ func writePlanReports(signal strategySignal, now time.Time) error {
 		return err
 	}
 	return nil
+}
+
+func nextTradingDateFromSignal(signal strategySignal, now time.Time) time.Time {
+	kind := marketKindUS
+	if isAShareSymbol(signal.Symbol) {
+		kind = marketKindAShare
+	}
+	base := now
+	if parsed, err := time.ParseInLocation("2006-01-02", signal.MarketDate, now.Location()); err == nil {
+		base = parsed
+	}
+	return nextTradingDay(base, kind)
+}
+
+func nextTradingDay(base time.Time, kind marketKind) time.Time {
+	candidate := time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, base.Location()).AddDate(0, 0, 1)
+	for {
+		if isTradingDay(candidate, kind) {
+			return candidate
+		}
+		candidate = candidate.AddDate(0, 0, 1)
+	}
+}
+
+func isTradingDay(day time.Time, kind marketKind) bool {
+	switch day.Weekday() {
+	case time.Saturday, time.Sunday:
+		return false
+	}
+	// Keep the calendar deliberately conservative for now: skip weekends
+	// and a minimal fixed-date holiday set so reports do not point to obvious
+	// non-trading days.
+	switch kind {
+	case marketKindAShare:
+		if isFixedHoliday(day, [][2]int{{1, 1}, {5, 1}, {10, 1}, {10, 2}, {10, 3}}) {
+			return false
+		}
+	case marketKindUS:
+		if isFixedHoliday(day, [][2]int{{1, 1}, {7, 4}, {12, 25}}) {
+			return false
+		}
+	}
+	return true
+}
+
+func isFixedHoliday(day time.Time, monthDays [][2]int) bool {
+	for _, item := range monthDays {
+		if int(day.Month()) == item[0] && day.Day() == item[1] {
+			return true
+		}
+	}
+	return false
 }
 
 func loadBarsFromAlphaVantage(symbol string, apiKey string) ([]marketBar, error) {
@@ -2010,7 +2720,7 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	shortMA := average(closes[len(closes)-strategy.ShortWindow:])
 	longMA := average(closes[len(closes)-strategy.LongWindow:])
 	avgVolume := average(volumes[len(volumes)-strategy.LongWindow:])
-	score := (shortMA - longMA) / longMA
+	trendScore, liquidityScore, structureScore, riskPenalty, score := scoreCandidate(latest.Close, shortMA, longMA, avgVolume)
 	action := "HOLD"
 	reason := buildReasonWithSource("moving averages are neutral", withSourceSuffix(dataSource, sourceErr))
 	trigger := fmt.Sprintf("Break above %.2f with volume expansion", shortMA)
@@ -2029,23 +2739,53 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
 
 	return scanCandidate{
-		Symbol:       symbol,
-		Name:         name,
-		Industry:     industry,
-		Action:       action,
-		Bucket:       bucket,
-		Score:        score,
-		AvgVolume:    avgVolume,
-		Trigger:      trigger,
-		TriggerPrice: triggerPrice,
-		AvoidTags:    avoidTags,
-		ShortMA:      shortMA,
-		LongMA:       longMA,
-		ClosePrice:   latest.Close,
-		MarketDate:   latest.Date,
-		Reason:       reason,
-		Plan:         planForBucket(bucket, action, shortMA, longMA, avgVolume),
+		Symbol:         symbol,
+		Name:           name,
+		Industry:       industry,
+		Action:         action,
+		Bucket:         bucket,
+		Score:          score,
+		TrendScore:     trendScore,
+		LiquidityScore: liquidityScore,
+		StructureScore: structureScore,
+		RiskPenalty:    riskPenalty,
+		AvgVolume:      avgVolume,
+		Trigger:        trigger,
+		TriggerPrice:   triggerPrice,
+		AvoidTags:      avoidTags,
+		ShortMA:        shortMA,
+		LongMA:         longMA,
+		ClosePrice:     latest.Close,
+		MarketDate:     latest.Date,
+		Reason:         reason,
+		Plan:           planForBucket(bucket, action, shortMA, longMA, avgVolume),
 	}, nil
+}
+
+func scoreCandidate(closePrice float64, shortMA float64, longMA float64, avgVolume float64) (float64, float64, float64, float64, float64) {
+	trendScore := 0.0
+	if longMA > 0 {
+		trendScore = (shortMA - longMA) / longMA
+	}
+
+	liquidityScore := 0.0
+	if avgVolume > 0 {
+		liquidityScore = math.Min(math.Log10(avgVolume+1)/8.0, 0.03)
+	}
+
+	structureScore := 0.0
+	if shortMA > 0 {
+		structureScore = (closePrice - shortMA) / shortMA
+	}
+
+	riskPenalty := 0.0
+	stopLine := longMA * 0.97
+	if stopLine > 0 && closePrice < stopLine {
+		riskPenalty = (stopLine - closePrice) / stopLine
+	}
+
+	total := trendScore + liquidityScore + structureScore - riskPenalty
+	return trendScore, liquidityScore, structureScore, riskPenalty, total
 }
 
 func bucketPriority(bucket string) int {
@@ -2276,11 +3016,20 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
+		fmt.Fprintf(builder, "   Score Breakdown: trend %.4f | liquidity %.4f | structure %.4f | risk_penalty %.4f\n",
+			candidate.TrendScore,
+			candidate.LiquidityScore,
+			candidate.StructureScore,
+			candidate.RiskPenalty,
+		)
 		fmt.Fprintf(builder, "   Avg Volume: %.0f\n", candidate.AvgVolume)
 		fmt.Fprintf(builder, "   Short/Long MA: %.2f / %.2f\n", candidate.ShortMA, candidate.LongMA)
 		fmt.Fprintf(builder, "   Close: %.2f\n", candidate.ClosePrice)
 		fmt.Fprintf(builder, "   Reason: %s\n", candidate.Reason)
 		fmt.Fprintf(builder, "   Trigger: %s (%.2f)\n", candidate.Trigger, candidate.TriggerPrice)
+		if candidate.InPortfolio {
+			fmt.Fprintf(builder, "   Portfolio: 当前已纳入组合持仓\n")
+		}
 		if candidate.HasBacktest {
 			fmt.Fprintf(builder, "   Backtest: %s -> %s | Return %.2f%% | Annualized %.2f%% | Benchmark %.2f%% | Excess %.2f%% | Max DD %.2f%% | Win rate %.2f%% | Trades %d\n",
 				candidate.BacktestFrom,
@@ -2316,6 +3065,10 @@ func buildBucketRows(candidates []scanCandidate) string {
 		if len(candidate.AvoidTags) > 0 {
 			avoidTags = "<br><small>Tags: " + html.EscapeString(strings.Join(candidate.AvoidTags, ", ")) + "</small>"
 		}
+		portfolioTag := ""
+		if candidate.InPortfolio {
+			portfolioTag = "<br><small>Portfolio: in current portfolio</small>"
+		}
 		backtestCell := `<small>No backtest snapshot</small>`
 		if candidate.HasBacktest {
 			backtestCell = fmt.Sprintf(`<small>%s to %s</small><br>Return %.2f%%<br>Annualized %.2f%%<br>Benchmark %.2f%%<br>Excess %.2f%%<br>Max DD %.2f%%<br>Win rate %.2f%%<br>Trades %d`,
@@ -2330,13 +3083,18 @@ func buildBucketRows(candidates []scanCandidate) string {
 				candidate.BacktestTrades,
 			)
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small></td><td>%s</td><td>%.4f</td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small>%s</td><td>%s</td><td>%s</td></tr>`,
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>T %.4f | L %.4f | S %.4f | R %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small>%s</td><td>%s</td><td>%s</td></tr>`,
 			i+1,
 			html.EscapeString(candidate.Symbol),
 			html.EscapeString(candidate.Name),
 			html.EscapeString(industry),
+			portfolioTag,
 			html.EscapeString(candidate.Action),
 			candidate.Score,
+			candidate.TrendScore,
+			candidate.LiquidityScore,
+			candidate.StructureScore,
+			candidate.RiskPenalty,
 			candidate.AvgVolume,
 			candidate.ShortMA,
 			candidate.LongMA,

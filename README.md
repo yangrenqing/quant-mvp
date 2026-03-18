@@ -23,10 +23,12 @@ Current MVP behavior:
 - supports single-symbol backtests with `--backtest --symbol 001696 --from 2025-01-01 --to 2026-03-18 --cash 100000`
 - writes backtest reports to `reports/backtest_latest.txt` and `reports/backtest_latest.html`
 - supports batch backtests over `data/a_share_universe.csv` with `--backtest-scan --from 2025-01-01 --to 2026-03-18 --top 10`
+- supports portfolio backtests with `--portfolio-backtest --from 2025-01-01 --to 2026-03-18 --top 5`
 - backtests support `--fee-bps` and `--slippage-bps`
 - backtests now include annualized return, buy-and-hold benchmark return, benchmark drawdown, and excess return
 - writes a structured batch backtest snapshot to `reports/backtest_scan.csv`
 - enriches A-share scan and focus reports with the latest batch backtest snapshot when available
+- writes portfolio backtest reports to `reports/portfolio_backtest.txt` and `reports/portfolio_backtest.html`
 - stores signal records, execution records, and current position state in SQLite
 - runs one execution on startup
 - waits for the next configured cron time and runs again
