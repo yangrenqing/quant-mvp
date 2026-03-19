@@ -1,6 +1,11 @@
 # quant-mvp
 Minimal Go-based semi-quant trading system.
 
+Documentation:
+- `docs/product_design.md`
+- `docs/development_guide.md`
+- `docs/user_guide.md`
+
 Current behavior:
 - loads layered config from:
   - `configs/config.yaml`
