@@ -2,3 +2,6 @@ model:
   default_label: label_10d
   model_path: reports/linear_model.json
   promotion_metric: rolling_directional_accuracy
+  min_promotion_edge: 0.0
+  min_shadow_observations: 1
+  shadow_version: candidate_auto_v1

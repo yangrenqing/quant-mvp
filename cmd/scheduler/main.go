@@ -64,9 +64,12 @@ type scheduleConfig struct {
 }
 
 type modelConfig struct {
-	DefaultLabel    string
-	ModelPath       string
-	PromotionMetric string
+	DefaultLabel          string
+	ModelPath             string
+	PromotionMetric       string
+	MinPromotionEdge      float64
+	MinShadowObservations int
+	ShadowVersion         string
 }
 
 type reportConfig struct {
@@ -292,6 +295,54 @@ type portfolioSnapshot struct {
 	Holdings []portfolioHolding
 }
 
+type paperPosition struct {
+	Symbol     string
+	Name       string
+	Shares     int
+	EntryPrice float64
+	EntryDate  string
+}
+
+type paperOrder struct {
+	PlacedAt string
+	Symbol   string
+	Name     string
+	Side     string
+	Quantity int
+	Price    float64
+	Status   string
+	Note     string
+}
+
+type paperFill struct {
+	FilledAt string
+	Symbol   string
+	Name     string
+	Side     string
+	Quantity int
+	Price    float64
+	Fee      float64
+	Note     string
+}
+
+type paperAccountResult struct {
+	AccountID  int
+	Version    string
+	Market     string
+	Mode       string
+	Session    string
+	MarketDate string
+	Status     string
+	UpdatedAt  string
+	Cash       float64
+	Equity     float64
+	Targets    []scanCandidate
+	Holdings   []paperPosition
+	Orders     []paperOrder
+	Fills      []paperFill
+	Note       string
+}
+
 type portfolioBacktestResult struct {
 	FromDate         string
 	ToDate           string
@@ -400,6 +451,8 @@ func main() {
 	backtest := flag.Bool("backtest", false, "Run a single-symbol backtest")
 	backtestScan := flag.Bool("backtest-scan", false, "Run a backtest across the local A-share universe")
 	portfolioBacktest := flag.Bool("portfolio-backtest", false, "Run a portfolio backtest across the local A-share universe")
+	paperRun := flag.Bool("paper-run", false, "Run the simulated paper-trading account")
+	paperShadowRun := flag.Bool("paper-shadow-run", false, "Run a shadow paper-trading account")
 	gridSearch := flag.Bool("grid-search", false, "Run a portfolio parameter grid search across short/long windows")
 	exportDataset := flag.Bool("export-dataset", false, "Export a training dataset with factor features and forward-return labels")
 	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
@@ -411,6 +464,10 @@ func main() {
 	shortMax := flag.Int("short-max", 8, "Grid search maximum short window")
 	longMin := flag.Int("long-min", 8, "Grid search minimum long window")
 	longMax := flag.Int("long-max", 20, "Grid search maximum long window")
+	paperInterval := flag.String("paper-interval", "60s", "Paper-trading polling interval")
+	paperMarket := flag.String("paper-market", "a_share", "Paper-trading market")
+	paperMode := flag.String("paper-mode", "live", "Paper-trading mode")
+	shadowVersion := flag.String("shadow-version", "", "Shadow strategy version name")
 	flag.Parse()
 
 	cfg, err := loadConfig(configPath)
@@ -424,6 +481,9 @@ func main() {
 
 	if err := ensureSQLiteDB(cfg.DB.Path); err != nil {
 		logger.Fatalf("ensure sqlite db: %v", err)
+	}
+	if err := ensureStrategyRegistrySeed(cfg); err != nil {
+		logger.Fatalf("ensure strategy registry: %v", err)
 	}
 	if err := os.MkdirAll(reportsDir, 0o755); err != nil {
 		logger.Fatalf("ensure reports dir: %v", err)
@@ -481,6 +541,77 @@ func main() {
 		}
 		printPortfolioBacktestSummary(result)
 		return
+	}
+	if *paperRun {
+		runCycle := func() {
+			activeCfg, versionName, err := resolveActiveStrategyConfig(runtimeConfig, *paperMarket)
+			if err != nil {
+				logger.Printf("resolve active strategy config: %v", err)
+				return
+			}
+			result, err := runPaperTrading(activeCfg.Strategy, activeCfg.Portfolio, activeCfg.Regime, *topN, *initialCash, *feeBps, *slippageBps, *paperMarket, *paperMode, versionName)
+			if err != nil {
+				logger.Printf("paper trading failed: %v", err)
+				return
+			}
+			if err := writePaperTradingReports(result); err != nil {
+				logger.Printf("write paper trading reports: %v", err)
+				return
+			}
+			printPaperTradingSummary(result)
+		}
+		runCycle()
+		if *once {
+			return
+		}
+		interval, err := time.ParseDuration(*paperInterval)
+		if err != nil {
+			logger.Fatalf("invalid paper interval: %v", err)
+		}
+		for {
+			logger.Printf("next paper run in %s", interval)
+			time.Sleep(interval)
+			runCycle()
+		}
+	}
+	if *paperShadowRun {
+		versionName := strings.TrimSpace(*shadowVersion)
+		if versionName == "" {
+			versionName = currentStrategyVersionName(cfg) + "_shadow"
+		}
+		if err := ensureStrategyVersion(runtimeConfig.DB.Path, "a_share", versionName, "shadow", currentStrategyVersionName(cfg), runtimeConfig); err != nil {
+			logger.Fatalf("ensure shadow strategy version: %v", err)
+		}
+		runCycle := func() {
+			shadowCfg, err := loadStrategyVersionConfig(runtimeConfig.DB.Path, versionName, runtimeConfig)
+			if err != nil {
+				logger.Printf("load shadow strategy config: %v", err)
+				return
+			}
+			result, err := runPaperTrading(shadowCfg.Strategy, shadowCfg.Portfolio, shadowCfg.Regime, *topN, *initialCash, *feeBps, *slippageBps, *paperMarket, "shadow:"+versionName, versionName)
+			if err != nil {
+				logger.Printf("shadow paper trading failed: %v", err)
+				return
+			}
+			if err := writePaperTradingReports(result); err != nil {
+				logger.Printf("write shadow paper trading reports: %v", err)
+				return
+			}
+			printPaperTradingSummary(result)
+		}
+		runCycle()
+		if *once {
+			return
+		}
+		interval, err := time.ParseDuration(*paperInterval)
+		if err != nil {
+			logger.Fatalf("invalid paper interval: %v", err)
+		}
+		for {
+			logger.Printf("next shadow paper run in %s", interval)
+			time.Sleep(interval)
+			runCycle()
+		}
 	}
 	if *gridSearch {
 		if *fromDate == "" || *toDate == "" {
@@ -547,13 +678,31 @@ func main() {
 }
 
 func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int) error {
+	selected, err := loadSelectedAShareCandidates(strategy, portfolio, topN)
+	if err != nil {
+		return err
+	}
+	if err := writeAShareScanReports(selected); err != nil {
+		return err
+	}
+
+	fmt.Printf("A-share scan complete. Top %d candidates written to %s and %s\n", len(selected), filepath.Join(reportsDir, "a_share_scan.txt"), filepath.Join(reportsDir, "a_share_scan.html"))
+	for i, candidate := range selected {
+		fmt.Printf("%d. [%s] %s %s %s score=%.4f close=%.2f\n", i+1, candidate.Bucket, candidate.Symbol, candidate.Name, candidate.Action, candidate.Score, candidate.ClosePrice)
+	}
+	fmt.Println()
+
+	return nil
+}
+
+func loadSelectedAShareCandidates(strategy strategyConfig, portfolio portfolioConfig, topN int) ([]scanCandidate, error) {
 	if topN <= 0 {
 		topN = 10
 	}
 
 	symbols, err := loadAShareUniverse()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	backtestSnapshot, _ := loadBacktestSnapshot(filepath.Join(reportsDir, "backtest_scan.csv"))
 	portfolioSnapshot, _ := loadPortfolioHoldingsSnapshot(filepath.Join(reportsDir, "portfolio_backtest.csv"))
@@ -579,7 +728,7 @@ func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int)
 	}
 
 	if len(candidates) == 0 {
-		return errors.New("no A-share candidates were generated")
+		return nil, errors.New("no A-share candidates were generated")
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -593,19 +742,7 @@ func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int)
 	if topN > len(candidates) {
 		topN = len(candidates)
 	}
-	selected := candidates[:topN]
-
-	if err := writeAShareScanReports(selected); err != nil {
-		return err
-	}
-
-	fmt.Printf("A-share scan complete. Top %d candidates written to %s and %s\n", topN, filepath.Join(reportsDir, "a_share_scan.txt"), filepath.Join(reportsDir, "a_share_scan.html"))
-	for i, candidate := range selected {
-		fmt.Printf("%d. [%s] %s %s %s score=%.4f close=%.2f\n", i+1, candidate.Bucket, candidate.Symbol, candidate.Name, candidate.Action, candidate.Score, candidate.ClosePrice)
-	}
-	fmt.Println()
-
-	return nil
+	return candidates[:topN], nil
 }
 
 func runBacktest(strategy strategyConfig, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
@@ -1057,6 +1194,274 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		CurrentHoldings:  currentHoldings,
 		ExposureLevel:    lastExposureLevel,
 		RegimeLabel:      lastRegimeLabel,
+	}, nil
+}
+
+func runPaperTrading(strategy strategyConfig, portfolio portfolioConfig, regime regimeConfig, topN int, initialCash float64, feeBps float64, slippageBps float64, market string, mode string, strategyVersion string) (paperAccountResult, error) {
+	if market != "a_share" {
+		return paperAccountResult{}, fmt.Errorf("unsupported paper market: %s", market)
+	}
+
+	selected, err := loadSelectedAShareCandidates(strategy, portfolio, topN)
+	if err != nil {
+		return paperAccountResult{}, err
+	}
+	if err := writeAShareScanReports(selected); err != nil {
+		return paperAccountResult{}, err
+	}
+
+	targets := make([]scanCandidate, 0, len(selected))
+	for _, candidate := range selected {
+		if candidate.Bucket == "建议关注" && candidate.Action == "BUY" {
+			targets = append(targets, candidate)
+		}
+	}
+	if len(targets) > topN {
+		targets = targets[:topN]
+	}
+
+	now := time.Now()
+	session := paperSessionForMarket(market, now)
+	accountID, cash, lastMarketDate, status, _, _, err := ensurePaperAccount(runtimeConfig.DB.Path, market, mode, initialCash, strategyVersion)
+	if err != nil {
+		return paperAccountResult{}, err
+	}
+	positions, err := loadPaperPositions(runtimeConfig.DB.Path, accountID)
+	if err != nil {
+		return paperAccountResult{}, err
+	}
+
+	symbolMeta := make(map[string]scanCandidate, len(targets))
+	for _, candidate := range targets {
+		symbolMeta[candidate.Symbol] = candidate
+	}
+	latestBars := make(map[string]marketBar, len(targets)+len(positions))
+	for _, candidate := range selected {
+		if _, ok := latestBars[candidate.Symbol]; !ok {
+			latestBars[candidate.Symbol] = marketBar{
+				Date:   candidate.MarketDate,
+				Open:   candidate.ClosePrice,
+				High:   candidate.ClosePrice,
+				Low:    candidate.ClosePrice,
+				Close:  candidate.ClosePrice,
+				Volume: candidate.AvgVolume,
+			}
+		}
+	}
+	for _, position := range positions {
+		if _, ok := latestBars[position.Symbol]; ok {
+			continue
+		}
+		bars, _, _, err := loadSymbolBars(position.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+		if err != nil || len(bars) == 0 {
+			continue
+		}
+		latestBars[position.Symbol] = bars[len(bars)-1]
+	}
+
+	marketDate := ""
+	for _, bar := range latestBars {
+		if bar.Date > marketDate {
+			marketDate = bar.Date
+		}
+	}
+	if marketDate == "" {
+		marketDate = now.Format("2006-01-02")
+	}
+
+	orders := make([]paperOrder, 0)
+	fills := make([]paperFill, 0)
+	noteParts := make([]string, 0, 3)
+	feeRateBuy := effectiveFeeRate(false)
+	feeRateSell := effectiveFeeRate(true)
+	slippageRate := slippageBps / 10000
+	positionMap := make(map[string]paperPosition, len(positions))
+	for _, position := range positions {
+		positionMap[position.Symbol] = position
+	}
+
+	if lastMarketDate == marketDate {
+		noteParts = append(noteParts, "latest market date already processed; snapshot refreshed only")
+	} else {
+		targetSet := make(map[string]scanCandidate, len(targets))
+		for _, candidate := range targets {
+			targetSet[candidate.Symbol] = candidate
+		}
+
+		for symbol, position := range positionMap {
+			bar, ok := latestBars[symbol]
+			if !ok {
+				continue
+			}
+			candidate, keep := targetSet[symbol]
+			if keep {
+				continue
+			}
+			order := paperOrder{
+				PlacedAt: now.Format(time.RFC3339),
+				Symbol:   symbol,
+				Name:     position.Name,
+				Side:     "SELL",
+				Quantity: position.Shares,
+				Price:    bar.Close,
+				Status:   "skipped",
+				Note:     "not in current target list",
+			}
+			if runtimeConfig.Market.AShareT1 && position.EntryDate == marketDate {
+				order.Note = "blocked by T+1 rule"
+				orders = append(orders, order)
+				continue
+			}
+			if isSellRestricted(symbol, candidate.Name, bar) {
+				order.Note = "sell restricted by market rule"
+				orders = append(orders, order)
+				continue
+			}
+			execPrice := bar.Close * (1 - slippageRate)
+			fee := float64(position.Shares) * execPrice * feeRateSell
+			cash += float64(position.Shares)*execPrice - fee
+			order.Price = execPrice
+			order.Status = "filled"
+			order.Note = "rebalanced out of target set"
+			orders = append(orders, order)
+			fills = append(fills, paperFill{
+				FilledAt: now.Format(time.RFC3339),
+				Symbol:   symbol,
+				Name:     position.Name,
+				Side:     "SELL",
+				Quantity: position.Shares,
+				Price:    execPrice,
+				Fee:      fee,
+				Note:     order.Note,
+			})
+			delete(positionMap, symbol)
+		}
+
+		equity := cash
+		for symbol, position := range positionMap {
+			if bar, ok := latestBars[symbol]; ok {
+				equity += float64(position.Shares) * bar.Close
+			}
+		}
+		targetSlots := len(targets)
+		if targetSlots < portfolio.MinHoldings {
+			targetSlots = portfolio.MinHoldings
+		}
+		deployableCapital := equity * (1 - portfolio.MaxCashShare)
+		slotValue := 0.0
+		if targetSlots > 0 {
+			slotValue = deployableCapital / float64(targetSlots)
+		}
+		maxSlotValue := equity * portfolio.MaxPositionWeight
+		if slotValue > maxSlotValue {
+			slotValue = maxSlotValue
+		}
+
+		for _, candidate := range targets {
+			if _, ok := positionMap[candidate.Symbol]; ok {
+				continue
+			}
+			bar, ok := latestBars[candidate.Symbol]
+			if !ok {
+				continue
+			}
+			order := paperOrder{
+				PlacedAt: now.Format(time.RFC3339),
+				Symbol:   candidate.Symbol,
+				Name:     candidate.Name,
+				Side:     "BUY",
+				Price:    bar.Close,
+				Status:   "skipped",
+				Note:     "waiting for capital allocation",
+			}
+			if isBuyRestricted(candidate.Symbol, candidate.Name, bar) {
+				order.Note = "buy restricted by market rule"
+				orders = append(orders, order)
+				continue
+			}
+			execPrice := bar.Close * (1 + slippageRate)
+			targetBudget := math.Min(slotValue, cash)
+			shares := int(targetBudget / (execPrice * (1 + feeRateBuy)))
+			capacity := capacityLimitedShares(bar, portfolio.CapacityTurnoverShare)
+			if capacity > 0 && shares > capacity {
+				shares = capacity
+			}
+			if shares <= 0 {
+				order.Note = "not enough cash or capacity"
+				orders = append(orders, order)
+				continue
+			}
+			fee := float64(shares) * execPrice * feeRateBuy
+			cost := float64(shares)*execPrice + fee
+			if cost > cash {
+				order.Note = "not enough cash after fees"
+				orders = append(orders, order)
+				continue
+			}
+			cash -= cost
+			order.Quantity = shares
+			order.Price = execPrice
+			order.Status = "filled"
+			order.Note = "entered paper target list"
+			orders = append(orders, order)
+			fills = append(fills, paperFill{
+				FilledAt: now.Format(time.RFC3339),
+				Symbol:   candidate.Symbol,
+				Name:     candidate.Name,
+				Side:     "BUY",
+				Quantity: shares,
+				Price:    execPrice,
+				Fee:      fee,
+				Note:     order.Note,
+			})
+			positionMap[candidate.Symbol] = paperPosition{
+				Symbol:     candidate.Symbol,
+				Name:       candidate.Name,
+				Shares:     shares,
+				EntryPrice: execPrice,
+				EntryDate:  marketDate,
+			}
+		}
+	}
+
+	holdings := make([]paperPosition, 0, len(positionMap))
+	equity := cash
+	for _, position := range positionMap {
+		holdings = append(holdings, position)
+		if bar, ok := latestBars[position.Symbol]; ok {
+			equity += float64(position.Shares) * bar.Close
+		}
+	}
+	sort.Slice(holdings, func(i, j int) bool { return holdings[i].Symbol < holdings[j].Symbol })
+
+	if len(noteParts) == 0 {
+		if session == "open" {
+			noteParts = append(noteParts, "market session is open; paper account polled with live candidates")
+		} else {
+			noteParts = append(noteParts, "market closed; paper account refreshed with latest available bars")
+		}
+	}
+	finalNote := strings.Join(noteParts, " | ")
+	if err := savePaperAccountState(runtimeConfig.DB.Path, accountID, market, mode, strategyVersion, marketDate, status, cash, equity, holdings, orders, fills, finalNote, now); err != nil {
+		return paperAccountResult{}, err
+	}
+
+	return paperAccountResult{
+		AccountID:  accountID,
+		Version:    strategyVersion,
+		Market:     market,
+		Mode:       mode,
+		Session:    session,
+		MarketDate: marketDate,
+		Status:     status,
+		UpdatedAt:  now.Format(time.RFC3339),
+		Cash:       cash,
+		Equity:     equity,
+		Targets:    targets,
+		Holdings:   holdings,
+		Orders:     orders,
+		Fills:      fills,
+		Note:       finalNote,
 	}, nil
 }
 
@@ -2790,6 +3195,159 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	return writeDashboardReports()
 }
 
+func writePaperTradingReports(result paperAccountResult) error {
+	baseName := paperReportBaseName(result.Mode)
+	textPath := filepath.Join(reportsDir, baseName+".txt")
+	htmlPath := filepath.Join(reportsDir, baseName+".html")
+	jsonPath := reportJSONPath(baseName)
+
+	var textBuilder strings.Builder
+	fmt.Fprintf(&textBuilder, "Paper Trading Account\n\n")
+	fmt.Fprintf(&textBuilder, "Account ID: %d\n", result.AccountID)
+	fmt.Fprintf(&textBuilder, "Strategy version: %s\n", result.Version)
+	fmt.Fprintf(&textBuilder, "Market: %s\n", result.Market)
+	fmt.Fprintf(&textBuilder, "Mode: %s\n", result.Mode)
+	fmt.Fprintf(&textBuilder, "Session: %s\n", result.Session)
+	fmt.Fprintf(&textBuilder, "Market date: %s\n", result.MarketDate)
+	fmt.Fprintf(&textBuilder, "Cash: %.2f\n", result.Cash)
+	fmt.Fprintf(&textBuilder, "Equity: %.2f\n", result.Equity)
+	fmt.Fprintf(&textBuilder, "Note: %s\n\n", result.Note)
+	textBuilder.WriteString("Current holdings\n")
+	if len(result.Holdings) == 0 {
+		textBuilder.WriteString("No holdings.\n")
+	} else {
+		for _, holding := range result.Holdings {
+			fmt.Fprintf(&textBuilder, "- %s %s shares=%d entry=%.2f entry_date=%s\n", holding.Symbol, holding.Name, holding.Shares, holding.EntryPrice, holding.EntryDate)
+		}
+	}
+	textBuilder.WriteString("\nOrders this cycle\n")
+	if len(result.Orders) == 0 {
+		textBuilder.WriteString("No orders.\n")
+	} else {
+		for _, order := range result.Orders {
+			fmt.Fprintf(&textBuilder, "- %s %s %s qty=%d price=%.2f status=%s note=%s\n", order.PlacedAt, order.Symbol, order.Side, order.Quantity, order.Price, order.Status, order.Note)
+		}
+	}
+	textBuilder.WriteString("\nTargets\n")
+	if len(result.Targets) == 0 {
+		textBuilder.WriteString("No current targets.\n")
+	} else {
+		for _, candidate := range result.Targets {
+			fmt.Fprintf(&textBuilder, "- %s %s score=%.4f plan=%s\n", candidate.Symbol, candidate.Name, candidate.Score, candidate.Plan)
+		}
+	}
+
+	var holdingsHTML strings.Builder
+	for _, holding := range result.Holdings {
+		fmt.Fprintf(&holdingsHTML, "<tr><td>%s</td><td>%s</td><td>%d</td><td>%.2f</td><td>%s</td></tr>",
+			html.EscapeString(holding.Symbol),
+			html.EscapeString(holding.Name),
+			holding.Shares,
+			holding.EntryPrice,
+			html.EscapeString(holding.EntryDate),
+		)
+	}
+	var ordersHTML strings.Builder
+	for _, order := range result.Orders {
+		fmt.Fprintf(&ordersHTML, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%.2f</td><td>%s</td><td>%s</td></tr>",
+			html.EscapeString(order.PlacedAt),
+			html.EscapeString(order.Symbol),
+			html.EscapeString(order.Side),
+			order.Quantity,
+			order.Price,
+			html.EscapeString(order.Status),
+			html.EscapeString(order.Note),
+		)
+	}
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Trading</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1100px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1, h2 { margin-top: 0; }
+    .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .meta div { background: #f8f1e6; border: 1px solid #eadfcd; border-radius: 14px; padding: 12px 14px; }
+    table { width: 100%%; border-collapse: collapse; font-size: 15px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; color: #6d6559; }
+    p { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Paper Trading Account</h1>
+      <div class="meta">
+        <div><strong>Account</strong><br>%d</div>
+        <div><strong>Version</strong><br>%s</div>
+        <div><strong>Market</strong><br>%s</div>
+        <div><strong>Session</strong><br>%s</div>
+        <div><strong>Market Date</strong><br>%s</div>
+        <div><strong>Cash</strong><br>%.2f</div>
+        <div><strong>Equity</strong><br>%.2f</div>
+      </div>
+      <p>%s</p>
+      <h2>Current Holdings</h2>
+      <table><thead><tr><th>Symbol</th><th>Name</th><th>Shares</th><th>Entry</th><th>Entry Date</th></tr></thead><tbody>%s</tbody></table>
+      <h2>Orders This Cycle</h2>
+      <table><thead><tr><th>Placed</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Status</th><th>Note</th></tr></thead><tbody>%s</tbody></table>
+    </div>
+  </div>
+</body>
+</html>`,
+		result.AccountID,
+		html.EscapeString(result.Version),
+		html.EscapeString(result.Market),
+		html.EscapeString(result.Session),
+		html.EscapeString(result.MarketDate),
+		result.Cash,
+		result.Equity,
+		html.EscapeString(result.Note),
+		holdingsHTML.String(),
+		ordersHTML.String(),
+	)
+
+	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(jsonPath, result); err != nil {
+		return err
+	}
+	runType := "paper_trading"
+	if strings.HasPrefix(result.Mode, "shadow:") {
+		runType = "paper_shadow"
+	}
+	if err := persistRunRecord(runType, map[string]any{
+		"account_id":    result.AccountID,
+		"version":       result.Version,
+		"market":        result.Market,
+		"session":       result.Session,
+		"market_date":   result.MarketDate,
+		"cash":          result.Cash,
+		"equity":        result.Equity,
+		"order_count":   len(result.Orders),
+		"holding_count": len(result.Holdings),
+	}, []string{textPath, htmlPath, jsonPath}); err != nil {
+		return err
+	}
+	return writeDashboardReports()
+}
+
+func paperReportBaseName(mode string) string {
+	if strings.HasPrefix(mode, "shadow:") {
+		return "paper_shadow"
+	}
+	return "paper_account"
+}
+
 func writeGridSearchReports(results []gridSearchResult, fromDate string, toDate string) error {
 	textPath := filepath.Join(reportsDir, "grid_search.txt")
 	htmlPath := filepath.Join(reportsDir, "grid_search.html")
@@ -3210,6 +3768,8 @@ func writeDashboardReports() error {
 		{title: "Latest Plan", path: filepath.Join(reportsDir, "latest_plan.txt")},
 		{title: "A-Share Focus", path: filepath.Join(reportsDir, "a_share_focus.txt")},
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
+		{title: "Paper Trading", path: filepath.Join(reportsDir, "paper_account.txt")},
+		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
 		{title: "Portfolio Backtest", path: filepath.Join(reportsDir, "portfolio_backtest.txt")},
 		{title: "Diagnostics", path: filepath.Join(reportsDir, "diagnostics.txt")},
 	}
@@ -3234,6 +3794,7 @@ func writeDashboardReports() error {
 	changeCard := buildChangeCard()
 	strongWeakCard := buildStrengthCard()
 	holdingCard := buildHoldingCard()
+	evolutionCard := buildStrategyEvolutionCard()
 
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
@@ -3242,6 +3803,7 @@ func writeDashboardReports() error {
 	textBuilder.WriteString("Changes vs Yesterday\n" + changeCard + "\n\n")
 	textBuilder.WriteString("Strongest / Weakest\n" + strongWeakCard + "\n\n")
 	textBuilder.WriteString("Current Holdings\n" + holdingCard + "\n\n")
+	textBuilder.WriteString("Strategy Evolution\n" + evolutionCard + "\n\n")
 	for _, section := range rendered {
 		textBuilder.WriteString(section.Title + "\n")
 		if section.Stamp != "" {
@@ -3260,6 +3822,7 @@ func writeDashboardReports() error {
 		{Title: "Changes vs Yesterday", Body: changeCard},
 		{Title: "Strongest / Weakest", Body: strongWeakCard},
 		{Title: "Current Holdings", Body: holdingCard},
+		{Title: "Strategy Evolution", Body: evolutionCard},
 	} {
 		fmt.Fprintf(&summaryCards, `<section class="summary"><h2>%s</h2><p>%s</p></section>`,
 			html.EscapeString(item.Title),
@@ -3316,12 +3879,13 @@ func writeDashboardReports() error {
 		return err
 	}
 	payload := map[string]any{
-		"today_conclusion": todayCard,
-		"risk_alerts":      riskCard,
-		"changes":          changeCard,
-		"strong_weak":      strongWeakCard,
-		"current_holdings": holdingCard,
-		"sections":         rendered,
+		"today_conclusion":   todayCard,
+		"risk_alerts":        riskCard,
+		"changes":            changeCard,
+		"strong_weak":        strongWeakCard,
+		"current_holdings":   holdingCard,
+		"strategy_evolution": evolutionCard,
+		"sections":           rendered,
 	}
 	if err := writeJSONFile(jsonPath, payload); err != nil {
 		return err
@@ -3437,6 +4001,100 @@ func currentGitCommit() string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func currentStrategyVersionName(cfg config) string {
+	return fmt.Sprintf("%s_%s_%d_%d", cfg.Strategy.Name, cfg.Strategy.Symbol, cfg.Strategy.ShortWindow, cfg.Strategy.LongWindow)
+}
+
+func ensureStrategyRegistrySeed(cfg config) error {
+	if strings.TrimSpace(cfg.DB.Path) == "" {
+		return nil
+	}
+	versionName := currentStrategyVersionName(cfg)
+	return ensureStrategyVersion(cfg.DB.Path, "a_share", versionName, "active", "", cfg)
+}
+
+func ensureStrategyVersion(dbPath string, market string, versionName string, status string, parentVersion string, cfg config) error {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM strategy_registry WHERE version_name = %s;", quoteSQL(versionName))
+	output, err := runSQLiteQuery(dbPath, query)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(output) != "" && strings.TrimSpace(output) != "0" {
+		return nil
+	}
+	configJSON, err := json.Marshal(map[string]any{
+		"strategy":  cfg.Strategy,
+		"risk":      cfg.Risk,
+		"portfolio": cfg.Portfolio,
+		"regime":    cfg.Regime,
+		"market":    cfg.Market,
+	})
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	activatedAt := ""
+	if status == "active" {
+		activatedAt = now
+	}
+	insert := fmt.Sprintf(
+		"INSERT INTO strategy_registry (market, version_name, status, parent_version, git_commit, config_json, model_path, created_at, activated_at, archived_at, notes) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+		quoteSQL(market),
+		quoteSQL(versionName),
+		quoteSQL(status),
+		quoteSQL(parentVersion),
+		quoteSQL(currentGitCommit()),
+		quoteSQL(string(configJSON)),
+		quoteSQL(cfg.Model.ModelPath),
+		quoteSQL(now),
+		quoteSQL(activatedAt),
+		quoteSQL(""),
+		quoteSQL("seeded from runtime configuration"),
+	)
+	return execSQLite(dbPath, insert)
+}
+
+func loadStrategyVersionConfig(dbPath string, versionName string, fallback config) (config, error) {
+	if strings.TrimSpace(dbPath) == "" || strings.TrimSpace(versionName) == "" {
+		return fallback, nil
+	}
+	query := fmt.Sprintf("SELECT config_json FROM strategy_registry WHERE version_name = %s ORDER BY id DESC LIMIT 1;", quoteSQL(versionName))
+	output, err := runSQLiteQuery(dbPath, query)
+	if err != nil {
+		return fallback, err
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return fallback, nil
+	}
+	cfg := fallback
+	if err := json.Unmarshal([]byte(trimmed), &cfg); err != nil {
+		return fallback, err
+	}
+	return cfg, nil
+}
+
+func resolveActiveStrategyConfig(base config, market string) (config, string, error) {
+	if strings.TrimSpace(base.DB.Path) == "" {
+		return base, currentStrategyVersionName(base), nil
+	}
+	query := fmt.Sprintf("SELECT version_name FROM strategy_registry WHERE market = %s AND status = 'active' ORDER BY id DESC LIMIT 1;", quoteSQL(market))
+	output, err := runSQLiteQuery(base.DB.Path, query)
+	if err != nil {
+		return base, currentStrategyVersionName(base), err
+	}
+	versionName := strings.TrimSpace(output)
+	if versionName == "" {
+		versionName = currentStrategyVersionName(base)
+		return base, versionName, nil
+	}
+	cfg, err := loadStrategyVersionConfig(base.DB.Path, versionName, base)
+	if err != nil {
+		return base, versionName, err
+	}
+	return cfg, versionName, nil
 }
 
 func persistRunRecord(runType string, summary map[string]any, files []string) error {
@@ -3629,6 +4287,28 @@ func readDashboardSection(path string) (string, string) {
 	return trimmed, stamp
 }
 
+func paperSessionForMarket(market string, now time.Time) string {
+	if market != "a_share" {
+		return "closed"
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	current := now.In(loc)
+	switch current.Weekday() {
+	case time.Saturday, time.Sunday:
+		return "closed"
+	}
+	minutes := current.Hour()*60 + current.Minute()
+	morning := minutes >= 9*60+30 && minutes < 11*60+30
+	afternoon := minutes >= 13*60 && minutes < 15*60
+	if morning || afternoon {
+		return "open"
+	}
+	return "closed"
+}
+
 func buildTodayConclusionCard() string {
 	focus, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
 	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
@@ -3702,6 +4382,57 @@ func buildHoldingCard() string {
 		return strings.TrimPrefix(line, "Current holdings: ")
 	}
 	return "当前没有组合持仓快照。"
+}
+
+func buildStrategyEvolutionCard() string {
+	if strings.TrimSpace(runtimeConfig.DB.Path) == "" {
+		return "策略演进数据库未启用。"
+	}
+	query := `SELECT strategy_version, mode, market_date, equity, order_count FROM paper_daily_metrics WHERE mode = 'live' OR mode LIKE 'shadow:%' ORDER BY id DESC LIMIT 20;`
+	output, err := runSQLiteQuery(runtimeConfig.DB.Path, query)
+	if err != nil || strings.TrimSpace(output) == "" {
+		return "还没有 active / shadow 对比数据。"
+	}
+	type metric struct {
+		Version string
+		Mode    string
+		Date    string
+		Equity  float64
+		Orders  int
+	}
+	metrics := make([]metric, 0)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.Split(line, "|")
+		if len(parts) != 5 {
+			continue
+		}
+		equity, _ := strconv.ParseFloat(parts[3], 64)
+		orders, _ := strconv.Atoi(parts[4])
+		metrics = append(metrics, metric{Version: parts[0], Mode: parts[1], Date: parts[2], Equity: equity, Orders: orders})
+	}
+	var active *metric
+	var shadow *metric
+	for _, item := range metrics {
+		if active == nil && item.Mode == "live" {
+			copy := item
+			active = &copy
+		}
+		if shadow == nil && strings.HasPrefix(item.Mode, "shadow:") {
+			copy := item
+			shadow = &copy
+		}
+	}
+	if active == nil && shadow == nil {
+		return "还没有 active / shadow 对比数据。"
+	}
+	if active != nil && shadow == nil {
+		return fmt.Sprintf("当前 active=%s equity=%.2f，尚无 shadow 账户。", active.Version, active.Equity)
+	}
+	if active == nil && shadow != nil {
+		return fmt.Sprintf("当前 shadow=%s equity=%.2f，尚无 active 对比。", shadow.Version, shadow.Equity)
+	}
+	diff := shadow.Equity - active.Equity
+	return fmt.Sprintf("active=%s equity=%.2f | shadow=%s equity=%.2f | diff=%.2f | market_date=%s", active.Version, active.Equity, shadow.Version, shadow.Equity, diff, active.Date)
 }
 
 func latestHistoricalFileBeforeToday(runType string, fileName string) string {
@@ -4049,6 +4780,20 @@ func loadConfig(path string) (config, error) {
 				cfg.Model.ModelPath = value
 			case "promotion_metric":
 				cfg.Model.PromotionMetric = value
+			case "min_promotion_edge":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid model.min_promotion_edge: %w", convErr)
+				}
+				cfg.Model.MinPromotionEdge = v
+			case "min_shadow_observations":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid model.min_shadow_observations: %w", convErr)
+				}
+				cfg.Model.MinShadowObservations = v
+			case "shadow_version":
+				cfg.Model.ShadowVersion = value
 			}
 		case "report":
 			switch key {
@@ -4474,6 +5219,12 @@ func loadConfig(path string) (config, error) {
 	if cfg.Model.PromotionMetric == "" {
 		cfg.Model.PromotionMetric = "rolling_directional_accuracy"
 	}
+	if cfg.Model.MinShadowObservations <= 0 {
+		cfg.Model.MinShadowObservations = 1
+	}
+	if strings.TrimSpace(cfg.Model.ShadowVersion) == "" {
+		cfg.Model.ShadowVersion = "candidate_auto_v1"
+	}
 	if cfg.Market.MainBoardLimit <= 0 {
 		cfg.Market.MainBoardLimit = 0.10
 	}
@@ -4748,6 +5499,114 @@ CREATE TABLE IF NOT EXISTS simulated_account_ledger (
     equity REAL NOT NULL,
     cash REAL NOT NULL,
     holdings_json TEXT NOT NULL,
+    note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    active_strategy TEXT NOT NULL,
+    cash REAL NOT NULL,
+    equity REAL NOT NULL,
+    last_market_date TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_positions (
+    account_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    shares INTEGER NOT NULL,
+    entry_price REAL NOT NULL,
+    entry_date TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(account_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS paper_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    side TEXT NOT NULL,
+    order_type TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    order_price REAL NOT NULL,
+    status TEXT NOT NULL,
+    placed_at TEXT NOT NULL,
+    note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_fills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER,
+    account_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    fill_price REAL NOT NULL,
+    fee REAL NOT NULL,
+    filled_at TEXT NOT NULL,
+    note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_equity_curve (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    snapshot_time TEXT NOT NULL,
+    market_date TEXT NOT NULL,
+    market TEXT NOT NULL,
+    equity REAL NOT NULL,
+    cash REAL NOT NULL,
+    holdings_json TEXT NOT NULL,
+    note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS strategy_registry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    version_name TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL,
+    parent_version TEXT NOT NULL,
+    git_commit TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    model_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    activated_at TEXT NOT NULL,
+    archived_at TEXT NOT NULL,
+    notes TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS strategy_promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    market TEXT NOT NULL,
+    from_version TEXT NOT NULL,
+    to_version TEXT NOT NULL,
+    trigger_reason TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_daily_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    strategy_version TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    market TEXT NOT NULL,
+    market_date TEXT NOT NULL,
+    equity REAL NOT NULL,
+    cash REAL NOT NULL,
+    holding_count INTEGER NOT NULL,
+    order_count INTEGER NOT NULL,
+    fill_count INTEGER NOT NULL,
+    session TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
     note TEXT NOT NULL
 );`)
 }
@@ -6686,6 +7545,185 @@ func runSQLiteQuery(path string, sql string) (string, error) {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
+}
+
+func ensurePaperAccount(dbPath string, market string, mode string, initialCash float64, strategyName string) (int, float64, string, string, string, string, error) {
+	query := fmt.Sprintf("SELECT id, cash, last_market_date, status, updated_at, note FROM paper_accounts WHERE market = %s AND mode = %s ORDER BY id DESC LIMIT 1;",
+		quoteSQL(market),
+		quoteSQL(mode),
+	)
+	output, err := runSQLiteQuery(dbPath, query)
+	if err != nil {
+		return 0, 0, "", "", "", "", err
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed != "" {
+		parts := strings.Split(trimmed, "|")
+		if len(parts) == 6 {
+			accountID, convErr := strconv.Atoi(parts[0])
+			if convErr != nil {
+				return 0, 0, "", "", "", "", convErr
+			}
+			cash, convErr := strconv.ParseFloat(parts[1], 64)
+			if convErr != nil {
+				return 0, 0, "", "", "", "", convErr
+			}
+			return accountID, cash, parts[2], parts[3], parts[4], parts[5], nil
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	insert := fmt.Sprintf(
+		"INSERT INTO paper_accounts (market, mode, status, active_strategy, cash, equity, last_market_date, created_at, updated_at, note) VALUES (%s, %s, %s, %s, %.6f, %.6f, %s, %s, %s, %s);",
+		quoteSQL(market),
+		quoteSQL(mode),
+		quoteSQL("active"),
+		quoteSQL(strategyName),
+		initialCash,
+		initialCash,
+		quoteSQL(""),
+		quoteSQL(now),
+		quoteSQL(now),
+		quoteSQL("paper account initialized"),
+	)
+	if err := execSQLite(dbPath, insert); err != nil {
+		return 0, 0, "", "", "", "", err
+	}
+	return ensurePaperAccount(dbPath, market, mode, initialCash, strategyName)
+}
+
+func loadPaperPositions(dbPath string, accountID int) ([]paperPosition, error) {
+	query := fmt.Sprintf("SELECT symbol, name, shares, entry_price, entry_date FROM paper_positions WHERE account_id = %d ORDER BY symbol;", accountID)
+	output, err := runSQLiteQuery(dbPath, query)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil, nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	positions := make([]paperPosition, 0, len(lines))
+	for _, line := range lines {
+		parts := strings.Split(line, "|")
+		if len(parts) != 5 {
+			continue
+		}
+		shares, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return nil, err
+		}
+		entryPrice, err := strconv.ParseFloat(parts[3], 64)
+		if err != nil {
+			return nil, err
+		}
+		positions = append(positions, paperPosition{
+			Symbol:     parts[0],
+			Name:       parts[1],
+			Shares:     shares,
+			EntryPrice: entryPrice,
+			EntryDate:  parts[4],
+		})
+	}
+	return positions, nil
+}
+
+func savePaperAccountState(dbPath string, accountID int, market string, mode string, strategyName string, marketDate string, status string, cash float64, equity float64, holdings []paperPosition, orders []paperOrder, fills []paperFill, note string, now time.Time) error {
+	holdingsJSON, _ := json.Marshal(holdings)
+	statements := []string{
+		fmt.Sprintf(
+			"UPDATE paper_accounts SET status = %s, active_strategy = %s, cash = %.6f, equity = %.6f, last_market_date = %s, updated_at = %s, note = %s WHERE id = %d;",
+			quoteSQL(status),
+			quoteSQL(strategyName),
+			cash,
+			equity,
+			quoteSQL(marketDate),
+			quoteSQL(now.Format(time.RFC3339)),
+			quoteSQL(note),
+			accountID,
+		),
+		fmt.Sprintf("DELETE FROM paper_positions WHERE account_id = %d;", accountID),
+	}
+	for _, holding := range holdings {
+		statements = append(statements, fmt.Sprintf(
+			"INSERT INTO paper_positions (account_id, symbol, name, shares, entry_price, entry_date, updated_at) VALUES (%d, %s, %s, %d, %.6f, %s, %s);",
+			accountID,
+			quoteSQL(holding.Symbol),
+			quoteSQL(holding.Name),
+			holding.Shares,
+			holding.EntryPrice,
+			quoteSQL(holding.EntryDate),
+			quoteSQL(now.Format(time.RFC3339)),
+		))
+	}
+	for _, order := range orders {
+		statements = append(statements, fmt.Sprintf(
+			"INSERT INTO paper_orders (account_id, symbol, name, side, order_type, quantity, order_price, status, placed_at, note) VALUES (%d, %s, %s, %s, %s, %d, %.6f, %s, %s, %s);",
+			accountID,
+			quoteSQL(order.Symbol),
+			quoteSQL(order.Name),
+			quoteSQL(order.Side),
+			quoteSQL("market"),
+			order.Quantity,
+			order.Price,
+			quoteSQL(order.Status),
+			quoteSQL(order.PlacedAt),
+			quoteSQL(order.Note),
+		))
+	}
+	for _, fill := range fills {
+		statements = append(statements, fmt.Sprintf(
+			"INSERT INTO paper_fills (order_id, account_id, symbol, name, side, quantity, fill_price, fee, filled_at, note) VALUES (NULL, %d, %s, %s, %s, %d, %.6f, %.6f, %s, %s);",
+			accountID,
+			quoteSQL(fill.Symbol),
+			quoteSQL(fill.Name),
+			quoteSQL(fill.Side),
+			fill.Quantity,
+			fill.Price,
+			fill.Fee,
+			quoteSQL(fill.FilledAt),
+			quoteSQL(fill.Note),
+		))
+	}
+	statements = append(statements, fmt.Sprintf(
+		"INSERT INTO paper_equity_curve (account_id, snapshot_time, market_date, market, equity, cash, holdings_json, note) VALUES (%d, %s, %s, %s, %.6f, %.6f, %s, %s);",
+		accountID,
+		quoteSQL(now.Format(time.RFC3339)),
+		quoteSQL(marketDate),
+		quoteSQL(market),
+		equity,
+		cash,
+		quoteSQL(string(holdingsJSON)),
+		quoteSQL(note),
+	))
+	statements = append(statements, fmt.Sprintf(
+		"INSERT INTO paper_daily_metrics (account_id, strategy_version, mode, market, market_date, equity, cash, holding_count, order_count, fill_count, session, recorded_at, note) VALUES (%d, %s, %s, %s, %s, %.6f, %.6f, %d, %d, %d, %s, %s, %s);",
+		accountID,
+		quoteSQL(strategyName),
+		quoteSQL(mode),
+		quoteSQL(market),
+		quoteSQL(marketDate),
+		equity,
+		cash,
+		len(holdings),
+		len(orders),
+		len(fills),
+		quoteSQL(paperSessionForMarket(market, now)),
+		quoteSQL(now.Format(time.RFC3339)),
+		quoteSQL(note),
+	))
+	return execSQLite(dbPath, strings.Join(statements, "\n"))
+}
+
+func printPaperTradingSummary(result paperAccountResult) {
+	fmt.Printf("Paper Trading %s %s\n", result.Market, result.MarketDate)
+	fmt.Printf("Session: %s\n", result.Session)
+	fmt.Printf("Cash: %.2f\n", result.Cash)
+	fmt.Printf("Equity: %.2f\n", result.Equity)
+	fmt.Printf("Targets: %d\n", len(result.Targets))
+	fmt.Printf("Holdings: %d\n", len(result.Holdings))
+	fmt.Printf("Orders this cycle: %d\n", len(result.Orders))
+	fmt.Printf("Note: %s\n\n", result.Note)
 }
 
 func execSQLite(path string, sql string) error {

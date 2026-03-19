@@ -6,6 +6,7 @@ Documentation:
 - `docs/development_guide.md`
 - `docs/user_guide.md`
 - `docs/research_implementation_plan.md`
+- `docs/auto_evolution_design.md`
 
 Current behavior:
 - loads layered config from:
