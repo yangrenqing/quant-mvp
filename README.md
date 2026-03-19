@@ -67,6 +67,8 @@ Useful flags:
 ```bash
 bash scripts/daily_run.sh --from 2025-01-01 --to 2026-03-19
 bash scripts/daily_run.sh --skip-model
+bash scripts/daily_run.sh --skip-health
+bash scripts/daily_run.sh --skip-factor
 bash scripts/daily_run.sh --scan-only
 ```
 
@@ -86,22 +88,39 @@ Model workflow:
 cd /Users/yangrenqing/Downloads/quant-mvp
 go run ./cmd/scheduler --export-dataset --from 2025-01-01 --to 2026-03-18
 python3 scripts/train_model.py --dataset reports/training_dataset.csv --label label_10d
+python3 scripts/train_classifier.py --dataset reports/training_dataset.csv --label beat_benchmark_10d
 python3 scripts/model_pipeline.py --from 2025-01-01 --to 2026-03-18 --label label_10d
 ```
 
 Key outputs:
 - `reports/linear_model.json`
+- `reports/benchmark_classifier.json`
 - `reports/model_train.txt`
 - `reports/model_predictions.csv`
 - `reports/model_pipeline_latest.txt`
 - `reports/model_registry.jsonl`
 - `reports/model_versions/<timestamp>/`
 - `reports/dashboard.html`
+- `reports/health_monitor.html`
+- `reports/factor_research.html`
 - `reports/history_compare.html`
 - `reports/market_overview.html`
 - `reports/history/YYYY-MM-DD/...`
 - `reports/run_index.jsonl`
 - `reports/experiments.jsonl`
+
+Intraday paper service:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+bash scripts/intraday_run.sh
+```
+
+Health and factor research:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+python3 scripts/health_monitor.py
+python3 scripts/factor_research.py --dataset reports/training_dataset.csv --label label_10d
+```
 
 Research workspace:
 ```bash

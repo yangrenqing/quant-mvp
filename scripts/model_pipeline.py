@@ -11,7 +11,22 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run the quant-mvp model learning pipeline.")
     parser.add_argument("--from", dest="from_date", required=True, help="Dataset start date in YYYY-MM-DD.")
     parser.add_argument("--to", dest="to_date", required=True, help="Dataset end date in YYYY-MM-DD.")
-    parser.add_argument("--label", default="label_10d", choices=["label_5d", "label_10d", "label_20d"], help="Training label.")
+    parser.add_argument(
+        "--label",
+        default="label_10d",
+        choices=[
+            "label_5d",
+            "label_10d",
+            "label_20d",
+            "excess_5d",
+            "excess_10d",
+            "excess_20d",
+            "beat_benchmark_5d",
+            "beat_benchmark_10d",
+            "beat_benchmark_20d",
+        ],
+        help="Training label.",
+    )
     parser.add_argument("--rolling-windows", type=int, default=4, help="Rolling validation windows.")
     parser.add_argument("--go-bin", default="/usr/local/go/bin/go", help="Go binary path.")
     parser.add_argument("--python-bin", default="python3", help="Python binary path.")

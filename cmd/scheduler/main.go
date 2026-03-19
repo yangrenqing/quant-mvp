@@ -28,6 +28,8 @@ const aShareBenchmarkSymbol = "000300.SH"
 
 var cachedLinearModel *linearModel
 var linearModelLoaded bool
+var cachedBenchmarkModel *linearModel
+var benchmarkModelLoaded bool
 var runtimeConfig config
 var diagnosticsState = runtimeDiagnostics{
 	ProviderFailures: map[string]int{},
@@ -66,6 +68,7 @@ type scheduleConfig struct {
 type modelConfig struct {
 	DefaultLabel          string
 	ModelPath             string
+	BenchmarkModelPath    string
 	PromotionMetric       string
 	MinPromotionEdge      float64
 	MinShadowObservations int
@@ -193,56 +196,57 @@ type positionState struct {
 }
 
 type scanCandidate struct {
-	Symbol             string
-	Name               string
-	Industry           string
-	Action             string
-	Bucket             string
-	Score              float64
-	QualityScore       float64
-	RiskScore          float64
-	HeatPenalty        float64
-	ReversalScore      float64
-	ValueScore         float64
-	LowVolScore        float64
-	CrowdingScore      float64
-	TrendScore         float64
-	LiquidityScore     float64
-	StructureScore     float64
-	MomentumScore      float64
-	PersistenceScore   float64
-	BreakoutScore      float64
-	VolumeTrendScore   float64
-	ShortReturnScore   float64
-	MediumReturnScore  float64
-	IndustryStrength   float64
-	RotationScore      float64
-	StrategyAlignment  float64
-	StrategyVotes      string
-	ModelScore         float64
-	RiskPenalty        float64
-	AvgVolume          float64
-	Trigger            string
-	TriggerPrice       float64
-	AvoidTags          []string
-	ShortMA            float64
-	LongMA             float64
-	ClosePrice         float64
-	MarketDate         string
-	Reason             string
-	Plan               string
-	HasBacktest        bool
-	BacktestMode       string
-	BacktestFrom       string
-	BacktestTo         string
-	BacktestReturn     float64
-	BacktestAnnualized float64
-	BacktestBenchmark  float64
-	BacktestExcess     float64
-	BacktestDrawdown   float64
-	BacktestWinRate    float64
-	BacktestTrades     int
-	InPortfolio        bool
+	Symbol              string
+	Name                string
+	Industry            string
+	Action              string
+	Bucket              string
+	Score               float64
+	QualityScore        float64
+	RiskScore           float64
+	HeatPenalty         float64
+	ReversalScore       float64
+	ValueScore          float64
+	LowVolScore         float64
+	CrowdingScore       float64
+	TrendScore          float64
+	LiquidityScore      float64
+	StructureScore      float64
+	MomentumScore       float64
+	PersistenceScore    float64
+	BreakoutScore       float64
+	VolumeTrendScore    float64
+	ShortReturnScore    float64
+	MediumReturnScore   float64
+	IndustryStrength    float64
+	RotationScore       float64
+	StrategyAlignment   float64
+	StrategyVotes       string
+	ModelScore          float64
+	BenchmarkModelScore float64
+	RiskPenalty         float64
+	AvgVolume           float64
+	Trigger             string
+	TriggerPrice        float64
+	AvoidTags           []string
+	ShortMA             float64
+	LongMA              float64
+	ClosePrice          float64
+	MarketDate          string
+	Reason              string
+	Plan                string
+	HasBacktest         bool
+	BacktestMode        string
+	BacktestFrom        string
+	BacktestTo          string
+	BacktestReturn      float64
+	BacktestAnnualized  float64
+	BacktestBenchmark   float64
+	BacktestExcess      float64
+	BacktestDrawdown    float64
+	BacktestWinRate     float64
+	BacktestTrades      int
+	InPortfolio         bool
 }
 
 type backtestTrade struct {
@@ -412,6 +416,12 @@ type datasetRow struct {
 	Label5D           float64
 	Label10D          float64
 	Label20D          float64
+	Excess5D          float64
+	Excess10D         float64
+	Excess20D         float64
+	BeatBenchmark5D   float64
+	BeatBenchmark10D  float64
+	BeatBenchmark20D  float64
 }
 
 type linearModelFeature struct {
@@ -422,6 +432,7 @@ type linearModelFeature struct {
 }
 
 type linearModel struct {
+	Task           string               `json:"task"`
 	Label          string               `json:"label"`
 	Bias           float64              `json:"bias"`
 	Features       []linearModelFeature `json:"features"`
@@ -455,6 +466,7 @@ func main() {
 	paperShadowRun := flag.Bool("paper-shadow-run", false, "Run a shadow paper-trading account")
 	gridSearch := flag.Bool("grid-search", false, "Run a portfolio parameter grid search across short/long windows")
 	exportDataset := flag.Bool("export-dataset", false, "Export a training dataset with factor features and forward-return labels")
+	dashboardOnly := flag.Bool("dashboard-only", false, "Rebuild dashboard and overview reports from the latest report files")
 	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
 	toDate := flag.String("to", "", "Backtest end date in YYYY-MM-DD")
 	initialCash := flag.Float64("cash", 100000, "Backtest initial cash")
@@ -496,6 +508,13 @@ func main() {
 	}
 	if err := cleanupOldArtifacts(); err != nil {
 		logger.Fatalf("cleanup artifacts: %v", err)
+	}
+	if *dashboardOnly {
+		if err := writeDashboardReports(); err != nil {
+			logger.Fatalf("write dashboard reports: %v", err)
+		}
+		fmt.Printf("dashboard rebuilt: %s\n", filepath.Join(reportsDir, "dashboard.html"))
+		return
 	}
 	if *backtest {
 		if strings.TrimSpace(cfg.Strategy.Symbol) == "" {
@@ -1563,6 +1582,17 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 			if math.IsNaN(label5) || math.IsNaN(label10) || math.IsNaN(label20) {
 				continue
 			}
+			benchmark5 := forwardReturn(benchmarkBars, date, 5)
+			benchmark10 := forwardReturn(benchmarkBars, date, 10)
+			benchmark20 := forwardReturn(benchmarkBars, date, 20)
+			if len(benchmarkBars) == 0 || math.IsNaN(benchmark5) || math.IsNaN(benchmark10) || math.IsNaN(benchmark20) {
+				benchmark5 = 0
+				benchmark10 = 0
+				benchmark20 = 0
+			}
+			excess5 := label5 - benchmark5
+			excess10 := label10 - benchmark10
+			excess20 := label20 - benchmark20
 			rows = append(rows, datasetRow{
 				Symbol:            candidate.Symbol,
 				Name:              candidate.Name,
@@ -1596,6 +1626,12 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 				Label5D:           label5,
 				Label10D:          label10,
 				Label20D:          label20,
+				Excess5D:          excess5,
+				Excess10D:         excess10,
+				Excess20D:         excess20,
+				BeatBenchmark5D:   boolToFloat(excess5 > 0),
+				BeatBenchmark10D:  boolToFloat(excess10 > 0),
+				BeatBenchmark20D:  boolToFloat(excess20 > 0),
 			})
 		}
 	}
@@ -1622,6 +1658,13 @@ func forwardReturn(bars []marketBar, date string, horizon int) float64 {
 		return math.NaN()
 	}
 	return end/start - 1
+}
+
+func boolToFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func simulateBacktest(symbol string, name string, bars []marketBar, mode string, shortWindow int, longWindow int, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
@@ -2388,6 +2431,7 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 	score += candidate.RotationScore * 1.20
 	score += candidate.StrategyAlignment * 1.50
 	score += candidate.ModelScore * 0.80
+	score += (candidate.BenchmarkModelScore - 0.50) * 0.60
 	if candidate.RiskPenalty > 0 {
 		score -= candidate.RiskPenalty
 	}
@@ -3474,9 +3518,9 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	jsonPath := reportJSONPath("training_dataset")
 
 	var csvBuilder strings.Builder
-	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,value_score,low_vol_score,crowding_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
+	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,value_score,low_vol_score,crowding_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d,excess_5d,excess_10d,excess_20d,beat_benchmark_5d,beat_benchmark_10d,beat_benchmark_20d\n")
 	for _, row := range rows {
-		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.0f,%.0f,%.0f\n",
 			row.Symbol,
 			sanitizeCSV(row.Name),
 			sanitizeCSV(row.Industry),
@@ -3509,11 +3553,17 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 			row.Label5D,
 			row.Label10D,
 			row.Label20D,
+			row.Excess5D,
+			row.Excess10D,
+			row.Excess20D,
+			row.BeatBenchmark5D,
+			row.BeatBenchmark10D,
+			row.BeatBenchmark20D,
 		)
 	}
 
 	var textBuilder strings.Builder
-	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 25\nLabels: label_5d, label_10d, label_20d\nCSV: %s\n\nSample Rows\n",
+	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 25\nLabels: label_5d, label_10d, label_20d, excess_5d, excess_10d, excess_20d, beat_benchmark_5d, beat_benchmark_10d, beat_benchmark_20d\nCSV: %s\n\nSample Rows\n",
 		fromDate,
 		toDate,
 		len(rows),
@@ -3522,7 +3572,7 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	sampleCount := min(5, len(rows))
 	for i := 0; i < sampleCount; i++ {
 		row := rows[i]
-		fmt.Fprintf(&textBuilder, "%d. %s %s %s score=%.4f label5=%.2f%% label10=%.2f%% label20=%.2f%%\n",
+		fmt.Fprintf(&textBuilder, "%d. %s %s %s score=%.4f label5=%.2f%% label10=%.2f%% label20=%.2f%% excess10=%.2f%% beat10=%.0f\n",
 			i+1,
 			row.Date,
 			row.Symbol,
@@ -3531,6 +3581,8 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 			row.Label5D*100,
 			row.Label10D*100,
 			row.Label20D*100,
+			row.Excess10D*100,
+			row.BeatBenchmark10D,
 		)
 	}
 
@@ -3592,8 +3644,29 @@ func getLinearModel() *linearModel {
 	return cachedLinearModel
 }
 
-func predictLinearModel(candidate scanCandidate) float64 {
-	model := getLinearModel()
+func getBenchmarkModel() *linearModel {
+	if benchmarkModelLoaded {
+		return cachedBenchmarkModel
+	}
+	benchmarkModelLoaded = true
+
+	path := runtimeConfig.Model.BenchmarkModelPath
+	if strings.TrimSpace(path) == "" {
+		path = filepath.Join(reportsDir, "benchmark_classifier.json")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var model linearModel
+	if err := json.Unmarshal(content, &model); err != nil {
+		return nil
+	}
+	cachedBenchmarkModel = &model
+	return cachedBenchmarkModel
+}
+
+func predictWithModel(model *linearModel, candidate scanCandidate) float64 {
 	if model == nil {
 		return 0
 	}
@@ -3631,7 +3704,18 @@ func predictLinearModel(candidate scanCandidate) float64 {
 		}
 		score += ((value - feature.Mean) / denom) * feature.Weight
 	}
+	if model.Task == "classification" || strings.HasPrefix(model.Label, "beat_benchmark_") {
+		return 1.0 / (1.0 + math.Exp(-score))
+	}
 	return score
+}
+
+func predictLinearModel(candidate scanCandidate) float64 {
+	return predictWithModel(getLinearModel(), candidate)
+}
+
+func predictBenchmarkModel(candidate scanCandidate) float64 {
+	return predictWithModel(getBenchmarkModel(), candidate)
 }
 
 func buildEquityCurveSVG(curve []backtestTrade) string {
@@ -3773,6 +3857,8 @@ func writeDashboardReports() error {
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
 		{title: "Paper Trading", path: filepath.Join(reportsDir, "paper_account.txt")},
 		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
+		{title: "Health Monitor", path: filepath.Join(reportsDir, "health_monitor.txt")},
+		{title: "Factor Research", path: filepath.Join(reportsDir, "factor_research.txt")},
 		{title: "Promotion Decision", path: filepath.Join(reportsDir, "strategy_promotion_latest.txt")},
 		{title: "Rollback Decision", path: filepath.Join(reportsDir, "strategy_rollback_latest.txt")},
 		{title: "Portfolio Backtest", path: filepath.Join(reportsDir, "portfolio_backtest.txt")},
@@ -3801,6 +3887,8 @@ func writeDashboardReports() error {
 	holdingCard := buildHoldingCard()
 	evolutionCard := buildStrategyEvolutionCard()
 	lifecycleCard := buildLifecycleSummaryCard()
+	healthCard := buildHealthSummaryCard()
+	factorCard := buildFactorSummaryCard()
 
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
@@ -3811,6 +3899,8 @@ func writeDashboardReports() error {
 	textBuilder.WriteString("Current Holdings\n" + holdingCard + "\n\n")
 	textBuilder.WriteString("Strategy Evolution\n" + evolutionCard + "\n\n")
 	textBuilder.WriteString("Lifecycle Summary\n" + lifecycleCard + "\n\n")
+	textBuilder.WriteString("System Health\n" + healthCard + "\n\n")
+	textBuilder.WriteString("Factor Research\n" + factorCard + "\n\n")
 	for _, section := range rendered {
 		textBuilder.WriteString(section.Title + "\n")
 		if section.Stamp != "" {
@@ -3831,6 +3921,8 @@ func writeDashboardReports() error {
 		{Title: "Current Holdings", Body: holdingCard},
 		{Title: "Strategy Evolution", Body: evolutionCard},
 		{Title: "Lifecycle Summary", Body: lifecycleCard},
+		{Title: "System Health", Body: healthCard},
+		{Title: "Factor Research", Body: factorCard},
 	} {
 		fmt.Fprintf(&summaryCards, `<section class="summary"><h2>%s</h2><p>%s</p></section>`,
 			html.EscapeString(item.Title),
@@ -3894,6 +3986,8 @@ func writeDashboardReports() error {
 		"current_holdings":   holdingCard,
 		"strategy_evolution": evolutionCard,
 		"lifecycle_summary":  lifecycleCard,
+		"system_health":      healthCard,
+		"factor_research":    factorCard,
 		"sections":           rendered,
 	}
 	if err := writeJSONFile(jsonPath, payload); err != nil {
@@ -4476,6 +4570,32 @@ func buildLifecycleSummaryCard() string {
 	return fmt.Sprintf("active=%s | versions=%s | last_event=%s", activeVersion, versionCount, lastEvent)
 }
 
+func buildHealthSummaryCard() string {
+	health, _ := readDashboardSection(filepath.Join(reportsDir, "health_monitor.txt"))
+	statusLine := firstMatchingLine(health, []string{"Status:", "Active strategy:", "Latest run:"})
+	if statusLine == "" {
+		return "系统健康报告尚未生成。"
+	}
+	providerLine := firstMatchingLine(health, []string{"Provider failures:", "Shadow equity:", "Active equity:"})
+	if providerLine == "" || providerLine == statusLine {
+		return statusLine
+	}
+	return statusLine + " | " + providerLine
+}
+
+func buildFactorSummaryCard() string {
+	factors, _ := readDashboardSection(filepath.Join(reportsDir, "factor_research.txt"))
+	rowLine := firstMatchingLine(factors, []string{"Rows:", "Features:", "Top factor correlations:"})
+	if rowLine == "" {
+		return "因子研究报告尚未生成。"
+	}
+	bestLine := firstMatchingLine(factors, []string{"- "})
+	if bestLine == "" {
+		return rowLine
+	}
+	return rowLine + " | " + bestLine
+}
+
 func latestHistoricalFileBeforeToday(runType string, fileName string) string {
 	root := reportHistoryRoot()
 	entries, err := os.ReadDir(root)
@@ -4928,6 +5048,8 @@ func loadConfig(path string) (config, error) {
 				cfg.Model.DefaultLabel = value
 			case "model_path":
 				cfg.Model.ModelPath = value
+			case "benchmark_model_path":
+				cfg.Model.BenchmarkModelPath = value
 			case "promotion_metric":
 				cfg.Model.PromotionMetric = value
 			case "min_promotion_edge":
@@ -5365,6 +5487,9 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Model.ModelPath == "" {
 		cfg.Model.ModelPath = filepath.Join(reportsDir, "linear_model.json")
+	}
+	if cfg.Model.BenchmarkModelPath == "" {
+		cfg.Model.BenchmarkModelPath = filepath.Join(reportsDir, "benchmark_classifier.json")
 	}
 	if cfg.Model.PromotionMetric == "" {
 		cfg.Model.PromotionMetric = "rolling_directional_accuracy"
@@ -6856,8 +6981,12 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 		Plan:              planForBucket(bucket, action, shortMA, longMA, avgVolume),
 	}
 	candidate.ModelScore = predictLinearModel(candidate)
+	candidate.BenchmarkModelScore = predictBenchmarkModel(candidate)
 	if candidate.ModelScore != 0 {
 		candidate.Score = candidate.Score*0.70 + candidate.ModelScore*0.30
+	}
+	if candidate.BenchmarkModelScore != 0 {
+		candidate.Score += (candidate.BenchmarkModelScore - 0.50) * 0.20
 	}
 	return candidate, nil
 }

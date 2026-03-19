@@ -7,16 +7,21 @@ mkdir -p "$AGENT_DIR"
 
 cp "$ROOT_DIR/launchd/com.yangrenqing.quant-mvp.daily.plist" "$AGENT_DIR/"
 cp "$ROOT_DIR/launchd/com.yangrenqing.quant-mvp.weekly.plist" "$AGENT_DIR/"
+cp "$ROOT_DIR/launchd/com.yangrenqing.quant-mvp.intraday.plist" "$AGENT_DIR/"
 
 launchctl bootout "gui/$(id -u)" "$AGENT_DIR/com.yangrenqing.quant-mvp.daily.plist" >/dev/null 2>&1 || true
 launchctl bootout "gui/$(id -u)" "$AGENT_DIR/com.yangrenqing.quant-mvp.weekly.plist" >/dev/null 2>&1 || true
+launchctl bootout "gui/$(id -u)" "$AGENT_DIR/com.yangrenqing.quant-mvp.intraday.plist" >/dev/null 2>&1 || true
 
 launchctl bootstrap "gui/$(id -u)" "$AGENT_DIR/com.yangrenqing.quant-mvp.daily.plist"
 launchctl bootstrap "gui/$(id -u)" "$AGENT_DIR/com.yangrenqing.quant-mvp.weekly.plist"
+launchctl bootstrap "gui/$(id -u)" "$AGENT_DIR/com.yangrenqing.quant-mvp.intraday.plist"
 
 launchctl enable "gui/$(id -u)/com.yangrenqing.quant-mvp.daily"
 launchctl enable "gui/$(id -u)/com.yangrenqing.quant-mvp.weekly"
+launchctl enable "gui/$(id -u)/com.yangrenqing.quant-mvp.intraday"
 
 echo "installed launchd agents:"
 echo "  com.yangrenqing.quant-mvp.daily"
 echo "  com.yangrenqing.quant-mvp.weekly"
+echo "  com.yangrenqing.quant-mvp.intraday"

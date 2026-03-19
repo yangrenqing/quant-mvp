@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yangrenqing.quant-mvp.intraday</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yangrenqing/Downloads/quant-mvp/scripts/intraday_run.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/yangrenqing/Downloads/quant-mvp</string>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/yangrenqing/Downloads/quant-mvp/reports/launchd_intraday.out</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/yangrenqing/Downloads/quant-mvp/reports/launchd_intraday.err</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
