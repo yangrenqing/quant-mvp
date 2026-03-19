@@ -5,6 +5,7 @@ Documentation:
 - `docs/product_design.md`
 - `docs/development_guide.md`
 - `docs/user_guide.md`
+- `docs/research_implementation_plan.md`
 
 Current behavior:
 - loads layered config from:

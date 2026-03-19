@@ -51,6 +51,7 @@ type config struct {
 	Regime    regimeConfig
 	Model     modelConfig
 	Report    reportConfig
+	Market    marketRuleConfig
 }
 
 type dbConfig struct {
@@ -74,6 +75,19 @@ type reportConfig struct {
 	CleanupKeepDays  int
 	ExperimentLedger string
 	RunIndexPath     string
+}
+
+type marketRuleConfig struct {
+	AShareT1               bool
+	MainBoardLimit         float64
+	ChiNextLimit           float64
+	STARLimit              float64
+	RiskWarningLimit       float64
+	StampDutySellBps       float64
+	TransferFeeBps         float64
+	HandlingFeeBps         float64
+	CommissionBps          float64
+	IPOUncappedTradingDays int
 }
 
 type strategyConfig struct {
@@ -186,6 +200,9 @@ type scanCandidate struct {
 	RiskScore          float64
 	HeatPenalty        float64
 	ReversalScore      float64
+	ValueScore         float64
+	LowVolScore        float64
+	CrowdingScore      float64
 	TrendScore         float64
 	LiquidityScore     float64
 	StructureScore     float64
@@ -325,6 +342,9 @@ type datasetRow struct {
 	RiskScore         float64
 	HeatPenalty       float64
 	ReversalScore     float64
+	ValueScore        float64
+	LowVolScore       float64
+	CrowdingScore     float64
 	TrendScore        float64
 	LiquidityScore    float64
 	StructureScore    float64
@@ -678,11 +698,13 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		barBySymbolDate[item.meta.Symbol] = dateMap
 	}
 
-	feeRate := feeBps / 10000
+	feeRateBuy := effectiveFeeRate(false)
+	feeRateSell := effectiveFeeRate(true)
 	slippageRate := slippageBps / 10000
 	cash := initialCash
 	holdings := map[string]int{}
 	entryPrices := map[string]float64{}
+	entryDates := map[string]string{}
 	holdingPeaks := map[string]float64{}
 	cooldownUntil := map[string]string{}
 	snapshots := make([]portfolioSnapshot, 0, len(dates))
@@ -777,42 +799,45 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				holdingPeaks[symbol] = bar.Close
 			}
 			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
-				if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, targetSet[symbol].Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
-				fee := float64(shares) * execPrice * feeRate
+				fee := float64(shares) * execPrice * feeRateSell
 				cash += float64(shares)*execPrice - fee
 				holdings[symbol] = 0
 				delete(entryPrices, symbol)
+				delete(entryDates, symbol)
 				delete(holdingPeaks, symbol)
 				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
 				rebalanceCount++
 				continue
 			}
 			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
-				if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, targetSet[symbol].Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
-				fee := float64(shares) * execPrice * feeRate
+				fee := float64(shares) * execPrice * feeRateSell
 				cash += float64(shares)*execPrice - fee
 				holdings[symbol] = 0
 				delete(entryPrices, symbol)
+				delete(entryDates, symbol)
 				delete(holdingPeaks, symbol)
 				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
 				rebalanceCount++
 				continue
 			}
 			if candidate, keep := targetSet[symbol]; keep && candidate.Action == "SELL" {
-				if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, candidate.Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
-				fee := float64(shares) * execPrice * feeRate
+				fee := float64(shares) * execPrice * feeRateSell
 				cash += float64(shares)*execPrice - fee
 				holdings[symbol] = 0
 				delete(entryPrices, symbol)
+				delete(entryDates, symbol)
 				delete(holdingPeaks, symbol)
 				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.TrendBreakCooldownDays)
 				rebalanceCount++
@@ -821,14 +846,15 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if _, keep := targetSet[symbol]; keep {
 				continue
 			}
-			if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+			if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, "", bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 				continue
 			}
 			execPrice := bar.Close * (1 - slippageRate)
-			fee := float64(shares) * execPrice * feeRate
+			fee := float64(shares) * execPrice * feeRateSell
 			cash += float64(shares)*execPrice - fee
 			holdings[symbol] = 0
 			delete(entryPrices, symbol)
+			delete(entryDates, symbol)
 			delete(holdingPeaks, symbol)
 			cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.ExitCooldownDays)
 			rebalanceCount++
@@ -876,7 +902,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				if nameVol > 0 && portfolio.VolatilityTarget > 0 {
 					targetSlotValue *= clampFloat(portfolio.VolatilityTarget/nameVol, 0.45, 1.15)
 				}
-				targetShares := int(targetSlotValue / (bar.Close * (1 + feeRate + slippageRate)))
+				targetShares := int(targetSlotValue / (bar.Close * (1 + feeRateBuy + slippageRate)))
 				if targetShares < 0 {
 					targetShares = 0
 				}
@@ -895,7 +921,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 
 				if diff < 0 {
 					sellShares := -diff
-					if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+					if (runtimeConfig.Market.AShareT1 && entryDates[candidate.Symbol] == date) || isSellRestricted(candidate.Symbol, candidate.Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 						continue
 					}
 					capacity := capacityLimitedShares(bar, portfolio.CapacityTurnoverShare)
@@ -906,11 +932,12 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 						continue
 					}
 					execPrice := bar.Close * (1 - slippageRate)
-					fee := float64(sellShares) * execPrice * feeRate
+					fee := float64(sellShares) * execPrice * feeRateSell
 					cash += float64(sellShares)*execPrice - fee
 					holdings[candidate.Symbol] = currentShares - sellShares
 					if holdings[candidate.Symbol] <= 0 {
 						delete(entryPrices, candidate.Symbol)
+						delete(entryDates, candidate.Symbol)
 						delete(holdingPeaks, candidate.Symbol)
 					}
 					rebalanceCount++
@@ -918,11 +945,11 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				}
 
 				execPrice := bar.Close * (1 + slippageRate)
-				if isBuyRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) >= portfolio.GapOpenThreshold {
+				if isBuyRestricted(candidate.Symbol, candidate.Name, bar) || gapOpenMove(prevBar.Close, bar) >= portfolio.GapOpenThreshold {
 					continue
 				}
 				cost := float64(diff) * execPrice
-				fee := cost * feeRate
+				fee := cost * feeRateBuy
 				capacity := capacityLimitedShares(bar, portfolio.CapacityTurnoverShare)
 				if capacity > 0 && diff > capacity {
 					diff = capacity
@@ -930,21 +957,22 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 						continue
 					}
 					cost = float64(diff) * execPrice
-					fee = cost * feeRate
+					fee = cost * feeRateBuy
 				}
 				if cost+fee > cash {
-					maxAffordable := int(cash / (execPrice * (1 + feeRate)))
+					maxAffordable := int(cash / (execPrice * (1 + feeRateBuy)))
 					diff = maxAffordable
 					if diff <= 0 {
 						continue
 					}
 					cost = float64(diff) * execPrice
-					fee = cost * feeRate
+					fee = cost * feeRateBuy
 				}
 				cash -= cost + fee
 				holdings[candidate.Symbol] = currentShares + diff
 				if currentShares == 0 {
 					entryPrices[candidate.Symbol] = execPrice
+					entryDates[candidate.Symbol] = date
 					holdingPeaks[candidate.Symbol] = bar.Close
 				}
 				rebalanceCount++
@@ -998,7 +1026,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 	benchmarkReturn := 0.0
 	benchmarkCurve := make([]backtestTrade, 0)
 	if len(benchmarkBars) > 0 {
-		benchmarkCurve = buildBenchmarkCurve(benchmarkBars, fromDate, toDate, initialCash, feeRate, slippageRate)
+		benchmarkCurve = buildBenchmarkCurve(aShareBenchmarkSymbol, "CSI300", benchmarkBars, fromDate, toDate, initialCash, feeRateBuy, feeRateSell, slippageRate)
 	}
 	if len(benchmarkCurve) == 0 {
 		benchmarkCurve = buildUniverseBenchmarkCurve(series, dates, initialCash)
@@ -1144,6 +1172,9 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 				RiskScore:         candidate.RiskScore,
 				HeatPenalty:       candidate.HeatPenalty,
 				ReversalScore:     candidate.ReversalScore,
+				ValueScore:        candidate.ValueScore,
+				LowVolScore:       candidate.LowVolScore,
+				CrowdingScore:     candidate.CrowdingScore,
 				TrendScore:        candidate.TrendScore,
 				LiquidityScore:    candidate.LiquidityScore,
 				StructureScore:    candidate.StructureScore,
@@ -1210,8 +1241,10 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 	peakEquity := initialCash
 	maxDrawdown := 0.0
 	totalFees := 0.0
-	feeRate := feeBps / 10000
+	feeRateBuy := effectiveFeeRate(false)
+	feeRateSell := effectiveFeeRate(true)
 	slippageRate := slippageBps / 10000
+	entryDate := ""
 
 	closes := make([]float64, 0, len(filtered))
 	for i, bar := range filtered {
@@ -1264,11 +1297,11 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 
 		switch action {
 		case "BUY":
-			if isBuyRestricted(bar, runtimeConfig.Portfolio.LimitMoveThreshold) || gapOpenMove(prevClose, bar) >= runtimeConfig.Portfolio.GapOpenThreshold {
+			if isBuyRestricted(symbol, name, bar) || gapOpenMove(prevClose, bar) >= runtimeConfig.Portfolio.GapOpenThreshold {
 				continue
 			}
 			execPrice := math.Max(bar.Open, bar.Close) * (1 + slippageRate)
-			buyShares := int(cash / (execPrice * (1 + feeRate)))
+			buyShares := int(cash / (execPrice * (1 + feeRateBuy)))
 			capacity := capacityLimitedShares(bar, runtimeConfig.Portfolio.CapacityTurnoverShare)
 			if capacity > 0 && buyShares > capacity {
 				buyShares = capacity
@@ -1276,11 +1309,12 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			if buyShares <= 0 {
 				continue
 			}
-			fee := float64(buyShares) * execPrice * feeRate
+			fee := float64(buyShares) * execPrice * feeRateBuy
 			cash -= float64(buyShares)*execPrice + fee
 			totalFees += fee
 			shares = buyShares
 			entryPrice = execPrice
+			entryDate = bar.Date
 			trades = append(trades, backtestTrade{
 				Date:   bar.Date,
 				Action: action,
@@ -1295,7 +1329,10 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			if shares <= 0 {
 				continue
 			}
-			if isSellRestricted(bar, runtimeConfig.Portfolio.LimitMoveThreshold) || gapOpenMove(prevClose, bar) <= -runtimeConfig.Portfolio.GapOpenThreshold {
+			if runtimeConfig.Market.AShareT1 && entryDate == bar.Date {
+				continue
+			}
+			if isSellRestricted(symbol, name, bar) || gapOpenMove(prevClose, bar) <= -runtimeConfig.Portfolio.GapOpenThreshold {
 				continue
 			}
 			execPrice := math.Min(bar.Open, bar.Close) * (1 - slippageRate)
@@ -1307,7 +1344,7 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			if sellShares <= 0 {
 				continue
 			}
-			fee := float64(sellShares) * execPrice * feeRate
+			fee := float64(sellShares) * execPrice * feeRateSell
 			proceeds := float64(sellShares)*execPrice - fee
 			cash += proceeds
 			totalFees += fee
@@ -1317,6 +1354,7 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 				if pnl > 0 {
 					winningTrades++
 				}
+				entryDate = ""
 			}
 			trades = append(trades, backtestTrade{
 				Date:   bar.Date,
@@ -1344,7 +1382,7 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 	if completedTrades > 0 {
 		winRate = float64(winningTrades) / float64(completedTrades)
 	}
-	benchmarkEquity, benchmarkReturn, benchmarkDrawdown := simulateBuyAndHoldBenchmark(filtered, initialCash, feeRate, slippageRate)
+	benchmarkEquity, benchmarkReturn, benchmarkDrawdown := simulateBuyAndHoldBenchmark(symbol, name, filtered, initialCash, feeRateBuy, feeRateSell, slippageRate)
 	annualizedReturn := annualizeReturn(finalEquity/initialCash, len(filtered))
 
 	return backtestResult{
@@ -1373,18 +1411,18 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 	}, nil
 }
 
-func simulateBuyAndHoldBenchmark(bars []marketBar, initialCash float64, feeRate float64, slippageRate float64) (float64, float64, float64) {
+func simulateBuyAndHoldBenchmark(symbol string, name string, bars []marketBar, initialCash float64, feeRateBuy float64, feeRateSell float64, slippageRate float64) (float64, float64, float64) {
 	if len(bars) == 0 {
 		return initialCash, 0, 0
 	}
 
 	buyPrice := bars[0].Close * (1 + slippageRate)
-	shares := int(initialCash / (buyPrice * (1 + feeRate)))
+	shares := int(initialCash / (buyPrice * (1 + feeRateBuy)))
 	if shares <= 0 {
 		return initialCash, 0, 0
 	}
 
-	buyFee := float64(shares) * buyPrice * feeRate
+	buyFee := float64(shares) * buyPrice * feeRateBuy
 	cash := initialCash - float64(shares)*buyPrice - buyFee
 	peakEquity := initialCash
 	maxDrawdown := 0.0
@@ -1402,8 +1440,15 @@ func simulateBuyAndHoldBenchmark(bars []marketBar, initialCash float64, feeRate 
 		}
 	}
 
-	sellPrice := bars[len(bars)-1].Close * (1 - slippageRate)
-	sellFee := float64(shares) * sellPrice * feeRate
+	finalBar := bars[len(bars)-1]
+	sellPrice := finalBar.Close * (1 - slippageRate)
+	if runtimeConfig.Market.AShareT1 && bars[0].Date == finalBar.Date {
+		return cash + float64(shares)*finalBar.Close, (cash + float64(shares)*finalBar.Close - initialCash) / initialCash, maxDrawdown
+	}
+	if isSellRestricted(symbol, name, finalBar) {
+		return cash + float64(shares)*finalBar.Close, (cash + float64(shares)*finalBar.Close - initialCash) / initialCash, maxDrawdown
+	}
+	sellFee := float64(shares) * sellPrice * feeRateSell
 	finalEquity := cash + float64(shares)*sellPrice - sellFee
 	return finalEquity, (finalEquity - initialCash) / initialCash, maxDrawdown
 }
@@ -1430,7 +1475,7 @@ func barsUpToDate(bars []marketBar, date string) []marketBar {
 	return bars[:idx]
 }
 
-func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate string, series []marketSeries, initialCash float64, feeRate float64, slippageRate float64) float64 {
+func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate string, series []marketSeries, initialCash float64, feeRateBuy float64, feeRateSell float64, slippageRate float64) float64 {
 	if len(selection) == 0 {
 		return 0
 	}
@@ -1451,7 +1496,7 @@ func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate s
 		if len(filtered) == 0 {
 			continue
 		}
-		_, ret, _ := simulateBuyAndHoldBenchmark(filtered, initialCash, feeRate, slippageRate)
+		_, ret, _ := simulateBuyAndHoldBenchmark(candidate.Symbol, candidate.Name, filtered, initialCash, feeRateBuy, feeRateSell, slippageRate)
 		values = append(values, ret)
 	}
 	if len(values) == 0 {
@@ -1460,7 +1505,7 @@ func averageBenchmarkReturn(selection []scanCandidate, fromDate string, toDate s
 	return average(values)
 }
 
-func buildBenchmarkCurve(bars []marketBar, fromDate string, toDate string, initialCash float64, feeRate float64, slippageRate float64) []backtestTrade {
+func buildBenchmarkCurve(symbol string, name string, bars []marketBar, fromDate string, toDate string, initialCash float64, feeRateBuy float64, feeRateSell float64, slippageRate float64) []backtestTrade {
 	filtered := make([]marketBar, 0, len(bars))
 	for _, bar := range bars {
 		if bar.Date >= fromDate && bar.Date <= toDate {
@@ -1472,16 +1517,19 @@ func buildBenchmarkCurve(bars []marketBar, fromDate string, toDate string, initi
 	}
 
 	buyPrice := filtered[0].Close * (1 + slippageRate)
-	shares := int(initialCash / (buyPrice * (1 + feeRate)))
+	shares := int(initialCash / (buyPrice * (1 + feeRateBuy)))
 	if shares <= 0 {
 		return nil
 	}
-	buyFee := float64(shares) * buyPrice * feeRate
+	buyFee := float64(shares) * buyPrice * feeRateBuy
 	cash := initialCash - float64(shares)*buyPrice - buyFee
 
 	curve := make([]backtestTrade, 0, len(filtered))
 	for _, bar := range filtered {
 		equity := cash + float64(shares)*bar.Close
+		if isSellRestricted(symbol, name, bar) {
+			equity = cash + float64(shares)*bar.Close
+		}
 		curve = append(curve, backtestTrade{
 			Date:   bar.Date,
 			Price:  bar.Close,
@@ -1562,7 +1610,13 @@ func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate,
 	if candidate.StructureScore > overheatThreshold {
 		return false
 	}
+	if candidate.CrowdingScore > 0.16 {
+		return false
+	}
 	if candidate.TrendScore < minTrendGap {
+		return false
+	}
+	if candidate.LowVolScore < -0.03 {
 		return false
 	}
 	if candidate.HasBacktest {
@@ -1630,6 +1684,71 @@ func seriesBarsForSymbol(series []marketSeries, symbol string) []marketBar {
 	return nil
 }
 
+func averageTurnover(bars []marketBar, lookback int) float64 {
+	if len(bars) == 0 {
+		return 0
+	}
+	if lookback <= 0 || lookback > len(bars) {
+		lookback = len(bars)
+	}
+	window := bars[len(bars)-lookback:]
+	total := 0.0
+	for _, bar := range window {
+		total += bar.Close * bar.Volume
+	}
+	return total / float64(len(window))
+}
+
+func amihudIlliquidity(bars []marketBar, lookback int) float64 {
+	if len(bars) < 2 {
+		return 0
+	}
+	if lookback <= 0 || lookback >= len(bars) {
+		lookback = len(bars) - 1
+	}
+	window := bars[len(bars)-lookback:]
+	total := 0.0
+	count := 0.0
+	for i := 1; i < len(window); i++ {
+		prevClose := window[i-1].Close
+		turnover := window[i].Close * window[i].Volume
+		if prevClose <= 0 || turnover <= 0 {
+			continue
+		}
+		ret := math.Abs(window[i].Close/prevClose - 1)
+		total += ret / turnover
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return total / count
+}
+
+func rollingMaxDrawdown(closes []float64, lookback int) float64 {
+	if len(closes) == 0 {
+		return 0
+	}
+	if lookback <= 0 || lookback > len(closes) {
+		lookback = len(closes)
+	}
+	window := closes[len(closes)-lookback:]
+	peak := window[0]
+	maxDrawdown := 0.0
+	for _, value := range window {
+		if value > peak {
+			peak = value
+		}
+		if peak > 0 {
+			drawdown := (peak - value) / peak
+			if drawdown > maxDrawdown {
+				maxDrawdown = drawdown
+			}
+		}
+	}
+	return maxDrawdown
+}
+
 func dailyMove(bar marketBar) float64 {
 	if bar.Open <= 0 {
 		return 0
@@ -1648,6 +1767,19 @@ func isSuspendedBar(bar marketBar) bool {
 	return bar.Volume <= 0 || (bar.Open == 0 && bar.High == 0 && bar.Low == 0 && bar.Close == 0)
 }
 
+func boardLimitForSymbol(symbol string, name string) float64 {
+	if isSTName(name) {
+		return runtimeConfig.Market.RiskWarningLimit
+	}
+	if strings.HasPrefix(symbol, "300") {
+		return runtimeConfig.Market.ChiNextLimit
+	}
+	if strings.HasPrefix(symbol, "688") {
+		return runtimeConfig.Market.STARLimit
+	}
+	return runtimeConfig.Market.MainBoardLimit
+}
+
 func isOnePriceLimitBar(bar marketBar, threshold float64) bool {
 	if bar.Open <= 0 {
 		return false
@@ -1656,11 +1788,13 @@ func isOnePriceLimitBar(bar marketBar, threshold float64) bool {
 	return intradayRange < 0.001 && math.Abs(dailyMove(bar)) >= threshold
 }
 
-func isBuyRestricted(bar marketBar, threshold float64) bool {
+func isBuyRestricted(symbol string, name string, bar marketBar) bool {
+	threshold := boardLimitForSymbol(symbol, name)
 	return isSuspendedBar(bar) || isOnePriceLimitBar(bar, threshold) || dailyMove(bar) >= threshold
 }
 
-func isSellRestricted(bar marketBar, threshold float64) bool {
+func isSellRestricted(symbol string, name string, bar marketBar) bool {
+	threshold := boardLimitForSymbol(symbol, name)
 	return isSuspendedBar(bar) || isOnePriceLimitBar(bar, threshold) || dailyMove(bar) <= -threshold
 }
 
@@ -1669,6 +1803,14 @@ func capacityLimitedShares(bar marketBar, capacityShare float64) int {
 		return 0
 	}
 	return int(bar.Volume * capacityShare)
+}
+
+func effectiveFeeRate(isSell bool) float64 {
+	rate := runtimeConfig.Market.CommissionBps + runtimeConfig.Market.TransferFeeBps + runtimeConfig.Market.HandlingFeeBps
+	if isSell {
+		rate += runtimeConfig.Market.StampDutySellBps
+	}
+	return rate / 10000
 }
 
 func candidateMedianScore(candidates []scanCandidate) float64 {
@@ -1825,6 +1967,9 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 	score += candidate.QualityScore * portfolio.QualityWeight
 	score += candidate.RiskScore * portfolio.RiskWeight
 	score += candidate.ReversalScore * portfolio.ReversalWeight
+	score += candidate.ValueScore * 0.95
+	score += candidate.LowVolScore * 1.10
+	score -= candidate.CrowdingScore * 0.95
 	score -= candidate.HeatPenalty * portfolio.HeatPenaltyWeight
 	if candidate.HasBacktest {
 		score += candidate.BacktestExcess * portfolio.BacktestExcessWeight
@@ -1847,9 +1992,9 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 	return score
 }
 
-func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, avgVolume float64, shortReturn float64, mediumReturn float64, trendScore float64, liquidityScore float64, persistenceScore float64, breakoutScore float64, volumeTrendScore float64, riskPenalty float64) (float64, float64, float64, float64) {
+func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, avgVolume float64, shortReturn float64, mediumReturn float64, trendScore float64, liquidityScore float64, persistenceScore float64, breakoutScore float64, volumeTrendScore float64, riskPenalty float64) (float64, float64, float64, float64, float64, float64, float64) {
 	if len(bars) == 0 {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, 0
 	}
 	latest := bars[len(bars)-1]
 	closes := make([]float64, 0, len(bars))
@@ -1857,7 +2002,46 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 		closes = append(closes, bar.Close)
 	}
 
-	qualityScore := clampFloat(trendScore*1.60+persistenceScore*1.40+liquidityScore*8.0+volumeTrendScore*1.10, -0.20, 0.35)
+	valueScore := 0.0
+	lookbackHigh := latest.Close
+	start := max(0, len(closes)-min(30, len(closes)))
+	for _, price := range closes[start:] {
+		if price > lookbackHigh {
+			lookbackHigh = price
+		}
+	}
+	if lookbackHigh > 0 && latest.Close >= longMA {
+		pullbackGap := 1 - latest.Close/lookbackHigh
+		valueScore = clampFloat(pullbackGap, 0, 0.18) * 0.70
+		if shortMA > 0 {
+			valueScore += clampFloat(shortMA/latest.Close-1, -0.03, 0.05) * 0.60
+		}
+	}
+
+	stabilityDrawdown := rollingMaxDrawdown(closes, min(20, len(closes)))
+	aboveLongRatio := 0.0
+	if len(bars) > 0 && longMA > 0 {
+		count := 0.0
+		for _, bar := range bars[max(0, len(bars)-min(20, len(bars))):] {
+			count++
+			if bar.Close >= longMA {
+				aboveLongRatio++
+			}
+		}
+		if count > 0 {
+			aboveLongRatio /= count
+		}
+	}
+
+	qualityScore := 0.0
+	qualityScore += trendScore * 1.15
+	qualityScore += persistenceScore * 1.35
+	qualityScore += liquidityScore * 5.50
+	qualityScore += valueScore * 0.85
+	qualityScore += clampFloat(aboveLongRatio-0.5, -0.2, 0.3) * 0.22
+	qualityScore += clampFloat(0.18-stabilityDrawdown, -0.10, 0.18) * 0.60
+	qualityScore += volumeTrendScore * 0.45
+	qualityScore = clampFloat(qualityScore, -0.20, 0.40)
 
 	volatilityPenalty := 0.0
 	lookback := min(10, len(closes)-1)
@@ -1876,6 +2060,11 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 		}
 	}
 
+	lowVolScore := 0.0
+	if volatilityPenalty > 0 {
+		lowVolScore = clampFloat(0.06-volatilityPenalty, -0.06, 0.06) * 1.10
+	}
+
 	riskScore := 0.0
 	if longMA > 0 {
 		distance := clampFloat(latest.Close/longMA-1, -0.08, 0.12)
@@ -1886,19 +2075,40 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 	if avgVolume > 0 {
 		riskScore += clampFloat(math.Log10(avgVolume+1)/10.0, 0, 0.08)
 	}
-	riskScore -= volatilityPenalty * 0.90
+	riskScore += lowVolScore
+	riskScore -= volatilityPenalty * 0.70
 	riskScore -= riskPenalty * 1.50
 	riskScore = clampFloat(riskScore, -0.15, 0.18)
 
+	crowdingScore := 0.0
+	if shortReturn > 0.04 {
+		crowdingScore += clampFloat(shortReturn-0.04, 0, 0.08) * 1.70
+	}
+	if mediumReturn > 0.12 {
+		crowdingScore += clampFloat(mediumReturn-0.12, 0, 0.15) * 1.20
+	}
+	if avgVolume > 0 {
+		recentVolumeWindow := min(3, len(bars))
+		recentAvgVolume := 0.0
+		for _, bar := range bars[len(bars)-recentVolumeWindow:] {
+			recentAvgVolume += bar.Volume
+		}
+		recentAvgVolume /= float64(recentVolumeWindow)
+		crowdingScore += clampFloat(recentAvgVolume/avgVolume-1, 0, 0.80) * 0.10
+	}
+	crowdingScore += clampFloat(breakoutScore, 0, 0.03) * 1.40
+	crowdingScore = clampFloat(crowdingScore, 0, 0.24)
+
 	heatPenalty := 0.0
 	if shortReturn > 0.05 {
-		heatPenalty += (shortReturn - 0.05) * 1.80
+		heatPenalty += (shortReturn - 0.05) * 1.60
 	}
 	if mediumReturn > 0.15 {
-		heatPenalty += (mediumReturn - 0.15) * 1.20
+		heatPenalty += (mediumReturn - 0.15) * 1.00
 	}
 	heatPenalty += clampFloat(breakoutScore-0.01, 0, 0.05) * 3.0
 	heatPenalty += clampFloat(volumeTrendScore-0.02, 0, 0.06) * 2.0
+	heatPenalty += crowdingScore * 0.85
 	heatPenalty = clampFloat(heatPenalty, 0, 0.25)
 
 	reversalScore := 0.0
@@ -1910,7 +2120,7 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 	}
 	reversalScore = clampFloat(reversalScore, 0, 0.18)
 
-	return qualityScore, riskScore, heatPenalty, reversalScore
+	return valueScore, lowVolScore, crowdingScore, qualityScore, riskScore, heatPenalty, reversalScore
 }
 
 func applyRotationOverlay(candidates []scanCandidate) {
@@ -2172,12 +2382,12 @@ func writeBacktestReports(result backtestResult) error {
 		return err
 	}
 	_ = appendExperimentRecord("backtest", map[string]any{
-		"symbol":        result.Symbol,
-		"from_date":     result.FromDate,
-		"to_date":       result.ToDate,
-		"fee_bps":       result.FeeBps,
-		"slippage_bps":  result.SlippageBps,
-		"initial_cash":  result.InitialCash,
+		"symbol":       result.Symbol,
+		"from_date":    result.FromDate,
+		"to_date":      result.ToDate,
+		"fee_bps":      result.FeeBps,
+		"slippage_bps": result.SlippageBps,
+		"initial_cash": result.InitialCash,
 	}, map[string]any{
 		"final_equity":      result.FinalEquity,
 		"total_return":      result.TotalReturn,
@@ -2187,10 +2397,10 @@ func writeBacktestReports(result backtestResult) error {
 		"win_rate":          result.WinRate,
 	})
 	return persistRunRecord("backtest_latest", map[string]any{
-		"symbol":           result.Symbol,
-		"mode":             result.Mode,
-		"total_return":     result.TotalReturn,
-		"max_drawdown":     result.MaxDrawdown,
+		"symbol":            result.Symbol,
+		"mode":              result.Mode,
+		"total_return":      result.TotalReturn,
+		"max_drawdown":      result.MaxDrawdown,
 		"annualized_return": result.AnnualizedReturn,
 	}, []string{textPath, htmlPath, jsonPath})
 }
@@ -2568,12 +2778,12 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		"rebalances":        result.RebalanceCount,
 	})
 	if err := persistRunRecord("portfolio_backtest", map[string]any{
-		"from_date":     result.FromDate,
-		"to_date":       result.ToDate,
-		"regime":        result.RegimeLabel,
+		"from_date":       result.FromDate,
+		"to_date":         result.ToDate,
+		"regime":          result.RegimeLabel,
 		"target_exposure": result.ExposureLevel,
-		"total_return":  result.TotalReturn,
-		"max_drawdown":  result.MaxDrawdown,
+		"total_return":    result.TotalReturn,
+		"max_drawdown":    result.MaxDrawdown,
 	}, []string{textPath, htmlPath, csvPath, jsonPath}); err != nil {
 		return err
 	}
@@ -2706,9 +2916,9 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	jsonPath := reportJSONPath("training_dataset")
 
 	var csvBuilder strings.Builder
-	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
+	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,value_score,low_vol_score,crowding_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
 	for _, row := range rows {
-		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
 			row.Symbol,
 			sanitizeCSV(row.Name),
 			sanitizeCSV(row.Industry),
@@ -2722,6 +2932,9 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 			row.RiskScore,
 			row.HeatPenalty,
 			row.ReversalScore,
+			row.ValueScore,
+			row.LowVolScore,
+			row.CrowdingScore,
 			row.TrendScore,
 			row.LiquidityScore,
 			row.StructureScore,
@@ -2742,7 +2955,7 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	}
 
 	var textBuilder strings.Builder
-	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 22\nLabels: label_5d, label_10d, label_20d\nCSV: %s\n\nSample Rows\n",
+	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 25\nLabels: label_5d, label_10d, label_20d\nCSV: %s\n\nSample Rows\n",
 		fromDate,
 		toDate,
 		len(rows),
@@ -2833,6 +3046,9 @@ func predictLinearModel(candidate scanCandidate) float64 {
 		"risk_score":          candidate.RiskScore,
 		"heat_penalty":        candidate.HeatPenalty,
 		"reversal_score":      candidate.ReversalScore,
+		"value_score":         candidate.ValueScore,
+		"low_vol_score":       candidate.LowVolScore,
+		"crowding_score":      candidate.CrowdingScore,
 		"trend_score":         candidate.TrendScore,
 		"liquidity_score":     candidate.LiquidityScore,
 		"structure_score":     candidate.StructureScore,
@@ -3757,6 +3973,7 @@ func loadConfig(path string) (config, error) {
 		filepath.Join(configDir, "data.yaml"),
 		filepath.Join(configDir, "portfolio.yaml"),
 		filepath.Join(configDir, "model.yaml"),
+		filepath.Join(configDir, "market.yaml"),
 		filepath.Join(configDir, "report.yaml"),
 		filepath.Join(configDir, "local.yaml"),
 	}
@@ -3773,7 +3990,20 @@ func loadConfig(path string) (config, error) {
 		merged.WriteString("\n")
 	}
 
-	var cfg config
+	var cfg = config{
+		Market: marketRuleConfig{
+			AShareT1:               true,
+			MainBoardLimit:         0.10,
+			ChiNextLimit:           0.20,
+			STARLimit:              0.20,
+			RiskWarningLimit:       0.05,
+			StampDutySellBps:       5.0,
+			TransferFeeBps:         0.1,
+			HandlingFeeBps:         0.341,
+			CommissionBps:          3.0,
+			IPOUncappedTradingDays: 5,
+		},
+	}
 	var section string
 
 	for lineNumber, raw := range strings.Split(merged.String(), "\n") {
@@ -3840,6 +4070,69 @@ func loadConfig(path string) (config, error) {
 				cfg.Report.ExperimentLedger = value
 			case "run_index_path":
 				cfg.Report.RunIndexPath = value
+			}
+		case "market":
+			switch key {
+			case "a_share_t1":
+				v, convErr := strconv.ParseBool(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.a_share_t1: %w", convErr)
+				}
+				cfg.Market.AShareT1 = v
+			case "main_board_limit":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.main_board_limit: %w", convErr)
+				}
+				cfg.Market.MainBoardLimit = v
+			case "chinext_limit":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.chinext_limit: %w", convErr)
+				}
+				cfg.Market.ChiNextLimit = v
+			case "star_limit":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.star_limit: %w", convErr)
+				}
+				cfg.Market.STARLimit = v
+			case "risk_warning_limit":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.risk_warning_limit: %w", convErr)
+				}
+				cfg.Market.RiskWarningLimit = v
+			case "stamp_duty_sell_bps":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.stamp_duty_sell_bps: %w", convErr)
+				}
+				cfg.Market.StampDutySellBps = v
+			case "transfer_fee_bps":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.transfer_fee_bps: %w", convErr)
+				}
+				cfg.Market.TransferFeeBps = v
+			case "handling_fee_bps":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.handling_fee_bps: %w", convErr)
+				}
+				cfg.Market.HandlingFeeBps = v
+			case "commission_bps":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.commission_bps: %w", convErr)
+				}
+				cfg.Market.CommissionBps = v
+			case "ipo_uncapped_trading_days":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid market.ipo_uncapped_trading_days: %w", convErr)
+				}
+				cfg.Market.IPOUncappedTradingDays = v
 			}
 		case "strategy":
 			switch key {
@@ -4180,6 +4473,33 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Model.PromotionMetric == "" {
 		cfg.Model.PromotionMetric = "rolling_directional_accuracy"
+	}
+	if cfg.Market.MainBoardLimit <= 0 {
+		cfg.Market.MainBoardLimit = 0.10
+	}
+	if cfg.Market.ChiNextLimit <= 0 {
+		cfg.Market.ChiNextLimit = 0.20
+	}
+	if cfg.Market.STARLimit <= 0 {
+		cfg.Market.STARLimit = 0.20
+	}
+	if cfg.Market.RiskWarningLimit <= 0 {
+		cfg.Market.RiskWarningLimit = 0.05
+	}
+	if cfg.Market.StampDutySellBps <= 0 {
+		cfg.Market.StampDutySellBps = 5.0
+	}
+	if cfg.Market.TransferFeeBps <= 0 {
+		cfg.Market.TransferFeeBps = 0.1
+	}
+	if cfg.Market.HandlingFeeBps <= 0 {
+		cfg.Market.HandlingFeeBps = 0.341
+	}
+	if cfg.Market.CommissionBps <= 0 {
+		cfg.Market.CommissionBps = 3.0
+	}
+	if cfg.Market.IPOUncappedTradingDays <= 0 {
+		cfg.Market.IPOUncappedTradingDays = 5
 	}
 	if cfg.Report.HistoryRoot == "" {
 		cfg.Report.HistoryRoot = filepath.Join(reportsDir, "history")
@@ -5479,7 +5799,7 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	trendScore, liquidityScore, structureScore, momentumScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty, score := scoreCandidate(bars, strategy.ShortWindow, strategy.LongWindow)
 	shortReturnScore := trailingReturn(closes, min(5, len(closes)-1))
 	mediumReturnScore := trailingReturn(closes, min(20, len(closes)-1))
-	qualityScore, riskScore, heatPenalty, reversalScore := candidateOverlayScores(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, trendScore, liquidityScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty)
+	valueScore, lowVolScore, crowdingScore, qualityScore, riskScore, heatPenalty, reversalScore := candidateOverlayScores(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, trendScore, liquidityScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty)
 	action, strategyAlignment, strategyVotes, reason, trigger := evaluateStrategyEnsemble(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, dataSource, sourceErr, portfolio)
 	score = score*0.35 +
 		qualityScore*portfolio.QualityWeight +
@@ -5500,6 +5820,9 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 		RiskScore:         riskScore,
 		HeatPenalty:       heatPenalty,
 		ReversalScore:     reversalScore,
+		ValueScore:        valueScore,
+		LowVolScore:       lowVolScore,
+		CrowdingScore:     crowdingScore,
 		TrendScore:        trendScore,
 		LiquidityScore:    liquidityScore,
 		StructureScore:    structureScore,
@@ -5544,6 +5867,8 @@ func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64,
 	shortMA := average(closes[len(closes)-shortWindow:])
 	longMA := average(closes[len(closes)-longWindow:])
 	avgVolume := average(volumes[len(volumes)-longWindow:])
+	avgTurnover := averageTurnover(bars, longWindow)
+	illiquidity := amihudIlliquidity(bars, min(10, len(bars)-1))
 
 	trendScore := 0.0
 	if longMA > 0 {
@@ -5551,8 +5876,19 @@ func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64,
 	}
 
 	liquidityScore := 0.0
-	if avgVolume > 0 {
-		liquidityScore = math.Min(math.Log10(avgVolume+1)/8.0, 0.03)
+	if avgTurnover > 0 {
+		liquidityScore += math.Min(math.Log10(avgTurnover+1)/10.0, 0.04)
+	}
+	if illiquidity > 0 {
+		liquidityScore -= clampFloat(illiquidity*1e8, 0, 0.03)
+	}
+	recentVolumeWindow := min(5, len(volumes))
+	if recentVolumeWindow > 1 {
+		recentVolatility := standardDeviation(volumes[len(volumes)-recentVolumeWindow:])
+		recentAverage := average(volumes[len(volumes)-recentVolumeWindow:])
+		if recentAverage > 0 {
+			liquidityScore += clampFloat(0.8-recentVolatility/recentAverage, -0.3, 0.3) * 0.03
+		}
 	}
 
 	structureScore := 0.0
@@ -5599,7 +5935,7 @@ func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64,
 	}
 
 	volumeTrendScore := 0.0
-	recentVolumeWindow := min(3, len(volumes))
+	recentVolumeWindow = min(3, len(volumes))
 	recentAvgVolume := average(volumes[len(volumes)-recentVolumeWindow:])
 	if avgVolume > 0 {
 		volumeRatio := recentAvgVolume/avgVolume - 1
@@ -5944,11 +6280,14 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
-		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | risk_penalty %.4f\n",
+		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | value %.4f | low_vol %.4f | crowding %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | risk_penalty %.4f\n",
 			candidate.QualityScore,
 			candidate.RiskScore,
 			candidate.HeatPenalty,
 			candidate.ReversalScore,
+			candidate.ValueScore,
+			candidate.LowVolScore,
+			candidate.CrowdingScore,
 			candidate.TrendScore,
 			candidate.LiquidityScore,
 			candidate.StructureScore,

@@ -1,0 +1,11 @@
+market:
+  a_share_t1: true
+  main_board_limit: 0.10
+  chinext_limit: 0.20
+  star_limit: 0.20
+  risk_warning_limit: 0.05
+  stamp_duty_sell_bps: 5.0
+  transfer_fee_bps: 0.1
+  handling_fee_bps: 0.341
+  commission_bps: 3.0
+  ipo_uncapped_trading_days: 5
