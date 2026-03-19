@@ -3774,6 +3774,7 @@ func writeDashboardReports() error {
 		{title: "Paper Trading", path: filepath.Join(reportsDir, "paper_account.txt")},
 		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
 		{title: "Promotion Decision", path: filepath.Join(reportsDir, "strategy_promotion_latest.txt")},
+		{title: "Rollback Decision", path: filepath.Join(reportsDir, "strategy_rollback_latest.txt")},
 		{title: "Portfolio Backtest", path: filepath.Join(reportsDir, "portfolio_backtest.txt")},
 		{title: "Diagnostics", path: filepath.Join(reportsDir, "diagnostics.txt")},
 	}
@@ -3799,6 +3800,7 @@ func writeDashboardReports() error {
 	strongWeakCard := buildStrengthCard()
 	holdingCard := buildHoldingCard()
 	evolutionCard := buildStrategyEvolutionCard()
+	lifecycleCard := buildLifecycleSummaryCard()
 
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
@@ -3808,6 +3810,7 @@ func writeDashboardReports() error {
 	textBuilder.WriteString("Strongest / Weakest\n" + strongWeakCard + "\n\n")
 	textBuilder.WriteString("Current Holdings\n" + holdingCard + "\n\n")
 	textBuilder.WriteString("Strategy Evolution\n" + evolutionCard + "\n\n")
+	textBuilder.WriteString("Lifecycle Summary\n" + lifecycleCard + "\n\n")
 	for _, section := range rendered {
 		textBuilder.WriteString(section.Title + "\n")
 		if section.Stamp != "" {
@@ -3827,6 +3830,7 @@ func writeDashboardReports() error {
 		{Title: "Strongest / Weakest", Body: strongWeakCard},
 		{Title: "Current Holdings", Body: holdingCard},
 		{Title: "Strategy Evolution", Body: evolutionCard},
+		{Title: "Lifecycle Summary", Body: lifecycleCard},
 	} {
 		fmt.Fprintf(&summaryCards, `<section class="summary"><h2>%s</h2><p>%s</p></section>`,
 			html.EscapeString(item.Title),
@@ -3889,6 +3893,7 @@ func writeDashboardReports() error {
 		"strong_weak":        strongWeakCard,
 		"current_holdings":   holdingCard,
 		"strategy_evolution": evolutionCard,
+		"lifecycle_summary":  lifecycleCard,
 		"sections":           rendered,
 	}
 	if err := writeJSONFile(jsonPath, payload); err != nil {
@@ -4447,6 +4452,28 @@ func buildStrategyEvolutionCard() string {
 	}
 	diff := shadow.Equity - active.Equity
 	return fmt.Sprintf("active=%s equity=%.2f | shadow=%s equity=%.2f | diff=%.2f | market_date=%s", active.Version, active.Equity, shadow.Version, shadow.Equity, diff, active.Date)
+}
+
+func buildLifecycleSummaryCard() string {
+	if strings.TrimSpace(runtimeConfig.DB.Path) == "" {
+		return "生命周期数据库未启用。"
+	}
+	activeOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT version_name FROM strategy_registry WHERE status = 'active' ORDER BY id DESC LIMIT 1;")
+	activeVersion := strings.TrimSpace(activeOutput)
+	countOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT COUNT(*) FROM strategy_registry;")
+	eventOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT event_type, from_version, to_version FROM strategy_promotions ORDER BY id DESC LIMIT 1;")
+	if activeVersion == "" {
+		activeVersion = "none"
+	}
+	versionCount := strings.TrimSpace(countOutput)
+	lastEvent := "no events"
+	if strings.TrimSpace(eventOutput) != "" {
+		parts := strings.Split(strings.TrimSpace(eventOutput), "|")
+		if len(parts) == 3 {
+			lastEvent = fmt.Sprintf("%s %s -> %s", parts[0], parts[1], parts[2])
+		}
+	}
+	return fmt.Sprintf("active=%s | versions=%s | last_event=%s", activeVersion, versionCount, lastEvent)
 }
 
 func latestHistoricalFileBeforeToday(runType string, fileName string) string {
