@@ -32,6 +32,11 @@ portfolio:
   risk_weight: 0.80
   heat_penalty_weight: 1.10
   reversal_weight: 0.90
+  industry_max_positions: 1
+  volatility_target: 0.18
+  capacity_turnover_share: 0.08
+  gap_open_threshold: 0.04
+  reserve_candidates: 2
 
 regime:
   cautious_exposure: 0.45

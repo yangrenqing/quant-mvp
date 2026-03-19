@@ -41,6 +41,10 @@ Current behavior:
 - appends unified run metadata to `reports/run_index.jsonl`
 - appends parameter experiments to `reports/experiments.jsonl` and `reports/experiments.csv`
 - writes diagnostics to `reports/diagnostics.txt` and `reports/diagnostics.json`
+- writes history comparison and market overview pages:
+  - `reports/history_compare.html`
+  - `reports/market_overview.html`
+- persists run / experiment / dashboard / simulated account history into SQLite
 - auto-cleans old history/model artifacts based on `report.cleanup_keep_days`
 - stores signal records, execution records, and current position state in SQLite
 - runs one execution on startup
@@ -50,6 +54,13 @@ Daily workflow:
 ```bash
 cd /Users/yangrenqing/Downloads/quant-mvp
 bash scripts/daily_run.sh
+```
+
+Useful flags:
+```bash
+bash scripts/daily_run.sh --from 2025-01-01 --to 2026-03-19
+bash scripts/daily_run.sh --skip-model
+bash scripts/daily_run.sh --scan-only
 ```
 
 Or with `make`:
@@ -79,6 +90,14 @@ Key outputs:
 - `reports/model_registry.jsonl`
 - `reports/model_versions/<timestamp>/`
 - `reports/dashboard.html`
+- `reports/history_compare.html`
+- `reports/market_overview.html`
 - `reports/history/YYYY-MM-DD/...`
 - `reports/run_index.jsonl`
 - `reports/experiments.jsonl`
+
+Research workspace:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+bash scripts/research_run.sh
+```

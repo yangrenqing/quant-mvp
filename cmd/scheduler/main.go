@@ -126,6 +126,11 @@ type portfolioConfig struct {
 	RiskWeight             float64
 	HeatPenaltyWeight      float64
 	ReversalWeight         float64
+	IndustryMaxPositions   int
+	VolatilityTarget       float64
+	CapacityTurnoverShare  float64
+	GapOpenThreshold       float64
+	ReserveCandidates      int
 }
 
 type regimeConfig struct {
@@ -728,9 +733,12 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			candidates = nil
 		}
 
+		rankedCandidates := append([]scanCandidate(nil), candidates...)
 		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings, portfolio)
+		reserveCandidates := reservePortfolioCandidates(rankedCandidates, candidates, portfolio.ReserveCandidates)
 		if len(candidates) > 0 {
 			latestSelection = append([]scanCandidate(nil), candidates...)
+			latestSelection = append(latestSelection, reserveCandidates...)
 		}
 
 		targetSet := make(map[string]scanCandidate, len(candidates))
@@ -761,11 +769,15 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if !ok {
 				continue
 			}
+			prevBar := bar
+			if prior, ok := barBySymbolDate[symbol][previousTradingDate(dates, dayIdx)]; ok {
+				prevBar = prior
+			}
 			if bar.Close > holdingPeaks[symbol] {
 				holdingPeaks[symbol] = bar.Close
 			}
 			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
-				if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+				if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
@@ -779,7 +791,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
-				if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+				if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
@@ -793,7 +805,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			if candidate, keep := targetSet[symbol]; keep && candidate.Action == "SELL" {
-				if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+				if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
@@ -809,7 +821,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if _, keep := targetSet[symbol]; keep {
 				continue
 			}
-			if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+			if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 				continue
 			}
 			execPrice := bar.Close * (1 - slippageRate)
@@ -852,9 +864,19 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				if !ok {
 					continue
 				}
+				prevBar := bar
+				if prior, ok := barBySymbolDate[candidate.Symbol][previousTradingDate(dates, dayIdx)]; ok {
+					prevBar = prior
+				}
 				currentShares := holdings[candidate.Symbol]
 				currentValue := float64(currentShares) * bar.Close
-				targetShares := int(slotValue / (bar.Close * (1 + feeRate + slippageRate)))
+				targetSlotValue := slotValue
+				history := barsUpToDate(seriesBarsForSymbol(series, candidate.Symbol), date)
+				nameVol := recentVolatility(history, min(10, len(history)-1))
+				if nameVol > 0 && portfolio.VolatilityTarget > 0 {
+					targetSlotValue *= clampFloat(portfolio.VolatilityTarget/nameVol, 0.45, 1.15)
+				}
+				targetShares := int(targetSlotValue / (bar.Close * (1 + feeRate + slippageRate)))
 				if targetShares < 0 {
 					targetShares = 0
 				}
@@ -873,7 +895,14 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 
 				if diff < 0 {
 					sellShares := -diff
-					if isSellRestricted(bar, portfolio.LimitMoveThreshold) {
+					if isSellRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+						continue
+					}
+					capacity := capacityLimitedShares(bar, portfolio.CapacityTurnoverShare)
+					if capacity > 0 && sellShares > capacity {
+						sellShares = capacity
+					}
+					if sellShares <= 0 {
 						continue
 					}
 					execPrice := bar.Close * (1 - slippageRate)
@@ -889,11 +918,20 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				}
 
 				execPrice := bar.Close * (1 + slippageRate)
-				if isBuyRestricted(bar, portfolio.LimitMoveThreshold) {
+				if isBuyRestricted(bar, portfolio.LimitMoveThreshold) || gapOpenMove(prevBar.Close, bar) >= portfolio.GapOpenThreshold {
 					continue
 				}
 				cost := float64(diff) * execPrice
 				fee := cost * feeRate
+				capacity := capacityLimitedShares(bar, portfolio.CapacityTurnoverShare)
+				if capacity > 0 && diff > capacity {
+					diff = capacity
+					if diff <= 0 {
+						continue
+					}
+					cost = float64(diff) * execPrice
+					fee = cost * feeRate
+				}
 				if cost+fee > cash {
 					maxAffordable := int(cash / (execPrice * (1 + feeRate)))
 					diff = maxAffordable
@@ -1203,6 +1241,11 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			continue
 		}
 
+		prevClose := bar.Close
+		if i > 0 {
+			prevClose = filtered[i-1].Close
+		}
+
 		shortMA := average(closes[len(closes)-shortWindow:])
 		longMA := average(closes[len(closes)-longWindow:])
 		action := ""
@@ -1221,8 +1264,15 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 
 		switch action {
 		case "BUY":
-			execPrice := bar.Close * (1 + slippageRate)
+			if isBuyRestricted(bar, runtimeConfig.Portfolio.LimitMoveThreshold) || gapOpenMove(prevClose, bar) >= runtimeConfig.Portfolio.GapOpenThreshold {
+				continue
+			}
+			execPrice := math.Max(bar.Open, bar.Close) * (1 + slippageRate)
 			buyShares := int(cash / (execPrice * (1 + feeRate)))
+			capacity := capacityLimitedShares(bar, runtimeConfig.Portfolio.CapacityTurnoverShare)
+			if capacity > 0 && buyShares > capacity {
+				buyShares = capacity
+			}
 			if buyShares <= 0 {
 				continue
 			}
@@ -1245,28 +1295,44 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			if shares <= 0 {
 				continue
 			}
-			execPrice := bar.Close * (1 - slippageRate)
-			fee := float64(shares) * execPrice * feeRate
-			proceeds := float64(shares)*execPrice - fee
+			if isSellRestricted(bar, runtimeConfig.Portfolio.LimitMoveThreshold) || gapOpenMove(prevClose, bar) <= -runtimeConfig.Portfolio.GapOpenThreshold {
+				continue
+			}
+			execPrice := math.Min(bar.Open, bar.Close) * (1 - slippageRate)
+			capacity := capacityLimitedShares(bar, runtimeConfig.Portfolio.CapacityTurnoverShare)
+			sellShares := shares
+			if capacity > 0 && sellShares > capacity {
+				sellShares = capacity
+			}
+			if sellShares <= 0 {
+				continue
+			}
+			fee := float64(sellShares) * execPrice * feeRate
+			proceeds := float64(sellShares)*execPrice - fee
 			cash += proceeds
 			totalFees += fee
-			pnl := (execPrice - entryPrice) * float64(shares)
-			completedTrades++
-			if pnl > 0 {
-				winningTrades++
+			pnl := (execPrice - entryPrice) * float64(sellShares)
+			if sellShares == shares {
+				completedTrades++
+				if pnl > 0 {
+					winningTrades++
+				}
 			}
 			trades = append(trades, backtestTrade{
 				Date:   bar.Date,
 				Action: action,
 				Price:  execPrice,
-				Shares: shares,
+				Shares: sellShares,
 				Fee:    fee,
 				Cash:   cash,
-				Equity: cash,
+				Equity: cash + float64(shares-sellShares)*bar.Close,
 				Reason: reason,
 			})
-			shares = 0
-			entryPrice = 0
+			shares -= sellShares
+			if shares <= 0 {
+				shares = 0
+				entryPrice = 0
+			}
 		}
 	}
 
@@ -1531,6 +1597,39 @@ func standardDeviation(values []float64) float64 {
 	return math.Sqrt(sum / float64(len(values)))
 }
 
+func recentVolatility(history []marketBar, lookback int) float64 {
+	if len(history) < 2 {
+		return 0
+	}
+	if lookback <= 0 || lookback >= len(history) {
+		lookback = len(history) - 1
+	}
+	returns := make([]float64, 0, lookback)
+	for i := len(history) - lookback; i < len(history); i++ {
+		if i == 0 || history[i-1].Close <= 0 {
+			continue
+		}
+		returns = append(returns, history[i].Close/history[i-1].Close-1)
+	}
+	return standardDeviation(returns)
+}
+
+func previousTradingDate(dates []string, idx int) string {
+	if idx <= 0 || idx >= len(dates) {
+		return ""
+	}
+	return dates[idx-1]
+}
+
+func seriesBarsForSymbol(series []marketSeries, symbol string) []marketBar {
+	for _, item := range series {
+		if item.meta.Symbol == symbol {
+			return item.bars
+		}
+	}
+	return nil
+}
+
 func dailyMove(bar marketBar) float64 {
 	if bar.Open <= 0 {
 		return 0
@@ -1538,12 +1637,38 @@ func dailyMove(bar marketBar) float64 {
 	return bar.Close/bar.Open - 1
 }
 
+func gapOpenMove(prevClose float64, bar marketBar) float64 {
+	if prevClose <= 0 {
+		return 0
+	}
+	return bar.Open/prevClose - 1
+}
+
+func isSuspendedBar(bar marketBar) bool {
+	return bar.Volume <= 0 || (bar.Open == 0 && bar.High == 0 && bar.Low == 0 && bar.Close == 0)
+}
+
+func isOnePriceLimitBar(bar marketBar, threshold float64) bool {
+	if bar.Open <= 0 {
+		return false
+	}
+	intradayRange := math.Abs(bar.High/bar.Open - 1)
+	return intradayRange < 0.001 && math.Abs(dailyMove(bar)) >= threshold
+}
+
 func isBuyRestricted(bar marketBar, threshold float64) bool {
-	return dailyMove(bar) >= threshold
+	return isSuspendedBar(bar) || isOnePriceLimitBar(bar, threshold) || dailyMove(bar) >= threshold
 }
 
 func isSellRestricted(bar marketBar, threshold float64) bool {
-	return dailyMove(bar) <= -threshold
+	return isSuspendedBar(bar) || isOnePriceLimitBar(bar, threshold) || dailyMove(bar) <= -threshold
+}
+
+func capacityLimitedShares(bar marketBar, capacityShare float64) int {
+	if bar.Volume <= 0 || capacityShare <= 0 {
+		return 0
+	}
+	return int(bar.Volume * capacityShare)
 }
 
 func candidateMedianScore(candidates []scanCandidate) float64 {
@@ -1627,6 +1752,10 @@ func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings
 
 	selected := make([]scanCandidate, 0, min(limit, max(minHoldings, topN)))
 	industryCount := make(map[string]int)
+	industryLimit := portfolio.IndustryMaxPositions
+	if industryLimit <= 0 {
+		industryLimit = 1
+	}
 	for _, candidate := range candidates {
 		// Prefer names with either strong standalone signal quality or
 		// acceptable historical validation.
@@ -1637,7 +1766,7 @@ func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings
 			continue
 		}
 		industryKey := normalizedIndustry(candidate.Industry)
-		if industryKey != "" && industryCount[industryKey] >= 1 {
+		if industryKey != "" && industryCount[industryKey] >= industryLimit {
 			continue
 		}
 		if isSimilarToSelected(candidate, selected) {
@@ -1672,6 +1801,23 @@ func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings
 		return candidates[:minHoldings]
 	}
 	return selected
+}
+
+func reservePortfolioCandidates(candidates []scanCandidate, selected []scanCandidate, reserveCount int) []scanCandidate {
+	if reserveCount <= 0 {
+		return nil
+	}
+	reserve := make([]scanCandidate, 0, reserveCount)
+	for _, candidate := range candidates {
+		if containsCandidate(selected, candidate.Symbol) {
+			continue
+		}
+		reserve = append(reserve, candidate)
+		if len(reserve) >= reserveCount {
+			break
+		}
+	}
+	return reserve
 }
 
 func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig) float64 {
@@ -2391,6 +2537,22 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	if err := writeJSONFile(jsonPath, result); err != nil {
 		return err
 	}
+	if runtimeConfig.DB.Path != "" && len(result.Snapshots) > 0 {
+		holdingsJSON, _ := json.Marshal(result.CurrentHoldings)
+		last := result.Snapshots[len(result.Snapshots)-1]
+		sql := fmt.Sprintf(
+			"INSERT INTO simulated_account_ledger (snapshot_date, market, regime, exposure, equity, cash, holdings_json, note) VALUES (%s, %s, %s, %.6f, %.6f, %.6f, %s, %s);",
+			quoteSQL(last.Date),
+			quoteSQL("a_share"),
+			quoteSQL(result.RegimeLabel),
+			result.ExposureLevel,
+			result.FinalEquity,
+			last.Cash,
+			quoteSQL(string(holdingsJSON)),
+			quoteSQL("portfolio_backtest_snapshot"),
+		)
+		_ = execSQLite(runtimeConfig.DB.Path, sql)
+	}
 	_ = appendExperimentRecord("portfolio_backtest", map[string]any{
 		"from_date": result.FromDate,
 		"to_date":   result.ToDate,
@@ -2814,6 +2976,12 @@ func writeDashboardReports() error {
 	textPath := filepath.Join(reportsDir, "dashboard.txt")
 	htmlPath := filepath.Join(reportsDir, "dashboard.html")
 	jsonPath := reportJSONPath("dashboard")
+	historyTextPath := filepath.Join(reportsDir, "history_compare.txt")
+	historyHTMLPath := filepath.Join(reportsDir, "history_compare.html")
+	historyJSONPath := reportJSONPath("history_compare")
+	marketTextPath := filepath.Join(reportsDir, "market_overview.txt")
+	marketHTMLPath := filepath.Join(reportsDir, "market_overview.html")
+	marketJSONPath := reportJSONPath("market_overview")
 
 	if err := writeDiagnosticsReports(); err != nil {
 		return err
@@ -2848,12 +3016,16 @@ func writeDashboardReports() error {
 	todayCard := buildTodayConclusionCard()
 	riskCard := buildRiskAlertCard()
 	changeCard := buildChangeCard()
+	strongWeakCard := buildStrengthCard()
+	holdingCard := buildHoldingCard()
 
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
 	textBuilder.WriteString("Today Conclusion\n" + todayCard + "\n\n")
 	textBuilder.WriteString("Risk Alerts\n" + riskCard + "\n\n")
 	textBuilder.WriteString("Changes vs Yesterday\n" + changeCard + "\n\n")
+	textBuilder.WriteString("Strongest / Weakest\n" + strongWeakCard + "\n\n")
+	textBuilder.WriteString("Current Holdings\n" + holdingCard + "\n\n")
 	for _, section := range rendered {
 		textBuilder.WriteString(section.Title + "\n")
 		if section.Stamp != "" {
@@ -2870,6 +3042,8 @@ func writeDashboardReports() error {
 		{Title: "Today Conclusion", Body: todayCard},
 		{Title: "Risk Alerts", Body: riskCard},
 		{Title: "Changes vs Yesterday", Body: changeCard},
+		{Title: "Strongest / Weakest", Body: strongWeakCard},
+		{Title: "Current Holdings", Body: holdingCard},
 	} {
 		fmt.Fprintf(&summaryCards, `<section class="summary"><h2>%s</h2><p>%s</p></section>`,
 			html.EscapeString(item.Title),
@@ -2899,7 +3073,7 @@ func writeDashboardReports() error {
     .wrap { max-width: 1280px; margin: 36px auto; padding: 0 20px 40px; }
     h1 { margin: 0 0 18px; font-size: 42px; }
     .lead { margin: 0 0 24px; color: var(--muted); font-size: 17px; }
-    .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-bottom: 18px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; margin-bottom: 18px; }
     .summary { background: linear-gradient(180deg, #fff8ef, #f5ead8); border: 1px solid var(--border); border-radius: 18px; padding: 18px 20px; box-shadow: 0 14px 34px rgba(70, 50, 20, 0.08); }
     .summary p { margin: 0; font-size: 15px; line-height: 1.55; color: #3a3128; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
@@ -2929,10 +3103,40 @@ func writeDashboardReports() error {
 		"today_conclusion": todayCard,
 		"risk_alerts":      riskCard,
 		"changes":          changeCard,
+		"strong_weak":      strongWeakCard,
+		"current_holdings": holdingCard,
 		"sections":         rendered,
 	}
 	if err := writeJSONFile(jsonPath, payload); err != nil {
 		return err
+	}
+	historyPayload, historyText, historyHTML := buildHistoryCompareReport()
+	if err := os.WriteFile(historyTextPath, []byte(historyText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(historyHTMLPath, []byte(historyHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(historyJSONPath, historyPayload); err != nil {
+		return err
+	}
+	marketPayload, marketText, marketHTML := buildMarketOverviewReport()
+	if err := os.WriteFile(marketTextPath, []byte(marketText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(marketHTMLPath, []byte(marketHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(marketJSONPath, marketPayload); err != nil {
+		return err
+	}
+	if runtimeConfig.DB.Path != "" {
+		summaryJSON, _ := json.Marshal(payload)
+		sql := fmt.Sprintf("INSERT INTO dashboard_snapshots (generated_at, summary_json) VALUES (%s, %s);",
+			quoteSQL(time.Now().Format(time.RFC3339)),
+			quoteSQL(string(summaryJSON)),
+		)
+		_ = execSQLite(runtimeConfig.DB.Path, sql)
 	}
 	return persistRunRecord("dashboard", payload, []string{textPath, htmlPath, jsonPath})
 }
@@ -3036,7 +3240,22 @@ func persistRunRecord(runType string, summary map[string]any, files []string) er
 		"files":        archivedFiles,
 		"summary":      summary,
 	}
-	return appendJSONLine(indexPath, record)
+	if err := appendJSONLine(indexPath, record); err != nil {
+		return err
+	}
+	if runtimeConfig.DB.Path != "" {
+		content, _ := json.Marshal(summary)
+		sql := fmt.Sprintf(
+			"INSERT INTO run_history (run_type, git_commit, generated_at, history_dir, summary_json) VALUES (%s, %s, %s, %s, %s);",
+			quoteSQL(runType),
+			quoteSQL(currentGitCommit()),
+			quoteSQL(time.Now().Format(time.RFC3339)),
+			quoteSQL(historyDir),
+			quoteSQL(string(content)),
+		)
+		_ = execSQLite(runtimeConfig.DB.Path, sql)
+	}
+	return nil
 }
 
 func appendExperimentRecord(experimentType string, configValues map[string]any, metrics map[string]any) error {
@@ -3053,13 +3272,24 @@ func appendExperimentRecord(experimentType string, configValues map[string]any, 
 		"config":          configValues,
 		"metrics":         metrics,
 	}
+	configJSON, _ := json.Marshal(configValues)
+	metricsJSON, _ := json.Marshal(metrics)
 	if err := appendJSONLine(jsonlPath, record); err != nil {
 		return err
 	}
+	if runtimeConfig.DB.Path != "" {
+		sql := fmt.Sprintf(
+			"INSERT INTO experiment_history (experiment_type, git_commit, recorded_at, config_json, metrics_json) VALUES (%s, %s, %s, %s, %s);",
+			quoteSQL(experimentType),
+			quoteSQL(currentGitCommit()),
+			quoteSQL(time.Now().Format(time.RFC3339)),
+			quoteSQL(string(configJSON)),
+			quoteSQL(string(metricsJSON)),
+		)
+		_ = execSQLite(runtimeConfig.DB.Path, sql)
+	}
 
 	header := []string{"recorded_at", "experiment_type", "git_commit", "config_json", "metrics_json"}
-	configJSON, _ := json.Marshal(configValues)
-	metricsJSON, _ := json.Marshal(metrics)
 	if _, err := os.Stat(csvPath); errors.Is(err, os.ErrNotExist) {
 		if err := writeCSVFile(csvPath, [][]string{header, {time.Now().Format(time.RFC3339), experimentType, currentGitCommit(), string(configJSON), string(metricsJSON)}}); err != nil {
 			return err
@@ -3239,6 +3469,25 @@ func buildChangeCard() string {
 	return strings.Join(parts, " | ")
 }
 
+func buildStrengthCard() string {
+	scan, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_scan.txt"))
+	symbols := extractLeadingSymbols(scan)
+	if len(symbols) == 0 {
+		return "还没有扫描结果。"
+	}
+	strong := symbols[0]
+	weak := symbols[len(symbols)-1]
+	return fmt.Sprintf("最强候选: %s | 最弱候选: %s", strong, weak)
+}
+
+func buildHoldingCard() string {
+	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
+	if line := firstMatchingLine(portfolio, []string{"Current holdings:"}); line != "" {
+		return strings.TrimPrefix(line, "Current holdings: ")
+	}
+	return "当前没有组合持仓快照。"
+}
+
 func latestHistoricalFileBeforeToday(runType string, fileName string) string {
 	root := reportHistoryRoot()
 	entries, err := os.ReadDir(root)
@@ -3302,6 +3551,66 @@ func firstMatchingLine(content string, prefixes []string) string {
 		}
 	}
 	return ""
+}
+
+func buildHistoryCompareReport() (map[string]any, string, string) {
+	lines := make([]string, 0)
+	rows := make([]string, 0)
+	payload := []map[string]any{}
+	runIndexPath := runtimeConfig.Report.RunIndexPath
+	content, err := os.ReadFile(runIndexPath)
+	if err != nil {
+		text := "History Compare\n\nNo run history yet.\n"
+		html := `<!doctype html><html><body><pre>No run history yet.</pre></body></html>`
+		return map[string]any{"entries": payload}, text, html
+	}
+	type historyEntry struct {
+		RunType string         `json:"run_type"`
+		When    string         `json:"generated_at"`
+		Summary map[string]any `json:"summary"`
+	}
+	entries := make([]historyEntry, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry historyEntry
+		if err := json.Unmarshal([]byte(line), &entry); err == nil {
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].When > entries[j].When })
+	limit := min(12, len(entries))
+	lines = append(lines, "History Compare", "")
+	for i := 0; i < limit; i++ {
+		entry := entries[i]
+		lines = append(lines, fmt.Sprintf("%s | %s | %v", entry.When, entry.RunType, entry.Summary))
+		rows = append(rows, fmt.Sprintf("<tr><td>%s</td><td>%s</td><td><pre>%s</pre></td></tr>",
+			html.EscapeString(entry.When),
+			html.EscapeString(entry.RunType),
+			html.EscapeString(fmt.Sprintf("%v", entry.Summary)),
+		))
+		payload = append(payload, map[string]any{
+			"generated_at": entry.When,
+			"run_type":     entry.RunType,
+			"summary":      entry.Summary,
+		})
+	}
+	text := strings.Join(lines, "\n") + "\n"
+	htmlContent := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>History Compare</title><style>body{font-family:Georgia,serif;background:#f4efe6;color:#1f1b16}.wrap{max-width:1100px;margin:36px auto;padding:0 20px}.card{background:#fffaf3;border:1px solid #d9cfbf;border-radius:18px;padding:24px}table{width:100%%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #e7dece;vertical-align:top}pre{margin:0;white-space:pre-wrap}</style></head><body><div class="wrap"><div class="card"><h1>History Compare</h1><table><thead><tr><th>When</th><th>Run Type</th><th>Summary</th></tr></thead><tbody>%s</tbody></table></div></div></body></html>`, strings.Join(rows, ""))
+	return map[string]any{"entries": payload}, text, htmlContent
+}
+
+func buildMarketOverviewReport() (map[string]any, string, string) {
+	usPlan, _ := readDashboardSection(filepath.Join(reportsDir, "latest_plan.txt"))
+	aShareFocus, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
+	payload := map[string]any{
+		"a_share_focus": aShareFocus,
+		"us_plan":       usPlan,
+	}
+	text := "Market Overview\n\nUS / Single-symbol Plan\n" + usPlan + "\n\nA-Share Focus\n" + aShareFocus + "\n"
+	htmlContent := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Market Overview</title><style>body{font-family:Georgia,serif;background:#f4efe6;color:#1f1b16}.wrap{max-width:1100px;margin:36px auto;padding:0 20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:#fffaf3;border:1px solid #d9cfbf;border-radius:18px;padding:24px}pre{white-space:pre-wrap}</style></head><body><div class="wrap"><h1>Market Overview</h1><div class="grid"><div class="card"><h2>US / Single-symbol</h2><pre>%s</pre></div><div class="card"><h2>A-Share Focus</h2><pre>%s</pre></div></div></div></body></html>`, html.EscapeString(usPlan), html.EscapeString(aShareFocus))
+	return payload, text, htmlContent
 }
 
 func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
@@ -3778,6 +4087,36 @@ func loadConfig(path string) (config, error) {
 					return config{}, fmt.Errorf("invalid portfolio.reversal_weight: %w", convErr)
 				}
 				cfg.Portfolio.ReversalWeight = v
+			case "industry_max_positions":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.industry_max_positions: %w", convErr)
+				}
+				cfg.Portfolio.IndustryMaxPositions = v
+			case "volatility_target":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.volatility_target: %w", convErr)
+				}
+				cfg.Portfolio.VolatilityTarget = v
+			case "capacity_turnover_share":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.capacity_turnover_share: %w", convErr)
+				}
+				cfg.Portfolio.CapacityTurnoverShare = v
+			case "gap_open_threshold":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.gap_open_threshold: %w", convErr)
+				}
+				cfg.Portfolio.GapOpenThreshold = v
+			case "reserve_candidates":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.reserve_candidates: %w", convErr)
+				}
+				cfg.Portfolio.ReserveCandidates = v
 			}
 		case "regime":
 			switch key {
@@ -3976,6 +4315,21 @@ func loadConfig(path string) (config, error) {
 	if cfg.Portfolio.ReversalWeight == 0 {
 		cfg.Portfolio.ReversalWeight = 0.90
 	}
+	if cfg.Portfolio.IndustryMaxPositions <= 0 {
+		cfg.Portfolio.IndustryMaxPositions = 1
+	}
+	if cfg.Portfolio.VolatilityTarget <= 0 {
+		cfg.Portfolio.VolatilityTarget = 0.18
+	}
+	if cfg.Portfolio.CapacityTurnoverShare <= 0 {
+		cfg.Portfolio.CapacityTurnoverShare = 0.08
+	}
+	if cfg.Portfolio.GapOpenThreshold <= 0 {
+		cfg.Portfolio.GapOpenThreshold = 0.04
+	}
+	if cfg.Portfolio.ReserveCandidates <= 0 {
+		cfg.Portfolio.ReserveCandidates = 2
+	}
 	if cfg.Regime.CautiousExposure <= 0 {
 		cfg.Regime.CautiousExposure = 0.45
 	}
@@ -4039,6 +4393,42 @@ CREATE TABLE IF NOT EXISTS position_state (
     quantity INTEGER NOT NULL,
     entry_price REAL NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_type TEXT NOT NULL,
+    git_commit TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    history_dir TEXT NOT NULL,
+    summary_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS experiment_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_type TEXT NOT NULL,
+    git_commit TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    metrics_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at TEXT NOT NULL,
+    summary_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS simulated_account_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date TEXT NOT NULL,
+    market TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    exposure REAL NOT NULL,
+    equity REAL NOT NULL,
+    cash REAL NOT NULL,
+    holdings_json TEXT NOT NULL,
+    note TEXT NOT NULL
 );`)
 }
 
