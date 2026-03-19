@@ -3770,6 +3770,7 @@ func writeDashboardReports() error {
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
 		{title: "Paper Trading", path: filepath.Join(reportsDir, "paper_account.txt")},
 		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
+		{title: "Promotion Decision", path: filepath.Join(reportsDir, "strategy_promotion_latest.txt")},
 		{title: "Portfolio Backtest", path: filepath.Join(reportsDir, "portfolio_backtest.txt")},
 		{title: "Diagnostics", path: filepath.Join(reportsDir, "diagnostics.txt")},
 	}
