@@ -25,11 +25,17 @@ const reportsDir = "reports"
 const aShareUniversePath = "data/a_share_universe.csv"
 const cacheDir = "data/cache"
 const aShareBenchmarkSymbol = "000300.SH"
+const fundamentalsPath = "data/fundamentals.csv"
+const eventsPath = "data/events.csv"
 
 var cachedLinearModel *linearModel
 var linearModelLoaded bool
 var cachedBenchmarkModel *linearModel
 var benchmarkModelLoaded bool
+var cachedFundamentals map[string]fundamentalSnapshot
+var fundamentalsLoaded bool
+var cachedEvents map[string]eventSnapshot
+var eventsLoaded bool
 var runtimeConfig config
 var diagnosticsState = runtimeDiagnostics{
 	ProviderFailures: map[string]int{},
@@ -209,6 +215,9 @@ type scanCandidate struct {
 	ValueScore          float64
 	LowVolScore         float64
 	CrowdingScore       float64
+	FundamentalScore    float64
+	ValuationScore      float64
+	EventScore          float64
 	TrendScore          float64
 	LiquidityScore      float64
 	StructureScore      float64
@@ -400,6 +409,9 @@ type datasetRow struct {
 	ValueScore        float64
 	LowVolScore       float64
 	CrowdingScore     float64
+	FundamentalScore  float64
+	ValuationScore    float64
+	EventScore        float64
 	TrendScore        float64
 	LiquidityScore    float64
 	StructureScore    float64
@@ -442,6 +454,27 @@ type linearModel struct {
 type marketSeries struct {
 	meta aShareSymbol
 	bars []marketBar
+}
+
+type fundamentalSnapshot struct {
+	Symbol        string
+	ROE           float64
+	ProfitGrowth  float64
+	CashflowRatio float64
+	DebtRatio     float64
+	PEPercentile  float64
+	PBPercentile  float64
+	PSPercentile  float64
+	UpdatedAt     string
+}
+
+type eventSnapshot struct {
+	Symbol       string
+	EarningsFlag float64
+	BuybackFlag  float64
+	UnlockFlag   float64
+	InsiderFlag  float64
+	UpdatedAt    string
 }
 
 type runtimeDiagnostics struct {
@@ -1593,6 +1626,7 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 			excess5 := label5 - benchmark5
 			excess10 := label10 - benchmark10
 			excess20 := label20 - benchmark20
+			fundamentalScore, valuationScore, eventScore := fundamentalOverlayScores(candidate.Symbol)
 			rows = append(rows, datasetRow{
 				Symbol:            candidate.Symbol,
 				Name:              candidate.Name,
@@ -1610,6 +1644,9 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 				ValueScore:        candidate.ValueScore,
 				LowVolScore:       candidate.LowVolScore,
 				CrowdingScore:     candidate.CrowdingScore,
+				FundamentalScore:  fundamentalScore,
+				ValuationScore:    valuationScore,
+				EventScore:        eventScore,
 				TrendScore:        candidate.TrendScore,
 				LiquidityScore:    candidate.LiquidityScore,
 				StructureScore:    candidate.StructureScore,
@@ -2418,6 +2455,9 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 	score += candidate.ValueScore * 0.95
 	score += candidate.LowVolScore * 1.10
 	score -= candidate.CrowdingScore * 0.95
+	score += candidate.FundamentalScore * 1.05
+	score += candidate.ValuationScore * 0.90
+	score += candidate.EventScore * 0.80
 	score -= candidate.HeatPenalty * portfolio.HeatPenaltyWeight
 	if candidate.HasBacktest {
 		score += candidate.BacktestExcess * portfolio.BacktestExcessWeight
@@ -3518,9 +3558,9 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	jsonPath := reportJSONPath("training_dataset")
 
 	var csvBuilder strings.Builder
-	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,value_score,low_vol_score,crowding_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d,excess_5d,excess_10d,excess_20d,beat_benchmark_5d,beat_benchmark_10d,beat_benchmark_20d\n")
+	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,value_score,low_vol_score,crowding_score,fundamental_score,valuation_score,event_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d,excess_5d,excess_10d,excess_20d,beat_benchmark_5d,beat_benchmark_10d,beat_benchmark_20d\n")
 	for _, row := range rows {
-		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.0f,%.0f,%.0f\n",
+		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.0f,%.0f,%.0f\n",
 			row.Symbol,
 			sanitizeCSV(row.Name),
 			sanitizeCSV(row.Industry),
@@ -3537,6 +3577,9 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 			row.ValueScore,
 			row.LowVolScore,
 			row.CrowdingScore,
+			row.FundamentalScore,
+			row.ValuationScore,
+			row.EventScore,
 			row.TrendScore,
 			row.LiquidityScore,
 			row.StructureScore,
@@ -3563,7 +3606,7 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	}
 
 	var textBuilder strings.Builder
-	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 25\nLabels: label_5d, label_10d, label_20d, excess_5d, excess_10d, excess_20d, beat_benchmark_5d, beat_benchmark_10d, beat_benchmark_20d\nCSV: %s\n\nSample Rows\n",
+	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 24\nLabels: label_5d, label_10d, label_20d, excess_5d, excess_10d, excess_20d, beat_benchmark_5d, beat_benchmark_10d, beat_benchmark_20d\nCSV: %s\n\nSample Rows\n",
 		fromDate,
 		toDate,
 		len(rows),
@@ -3680,6 +3723,9 @@ func predictWithModel(model *linearModel, candidate scanCandidate) float64 {
 		"value_score":         candidate.ValueScore,
 		"low_vol_score":       candidate.LowVolScore,
 		"crowding_score":      candidate.CrowdingScore,
+		"fundamental_score":   candidate.FundamentalScore,
+		"valuation_score":     candidate.ValuationScore,
+		"event_score":         candidate.EventScore,
 		"trend_score":         candidate.TrendScore,
 		"liquidity_score":     candidate.LiquidityScore,
 		"structure_score":     candidate.StructureScore,
@@ -6915,6 +6961,143 @@ func loadAShareUniverse() ([]aShareSymbol, error) {
 	return symbols, nil
 }
 
+func loadFundamentalSnapshots() map[string]fundamentalSnapshot {
+	if fundamentalsLoaded {
+		return cachedFundamentals
+	}
+	fundamentalsLoaded = true
+	cachedFundamentals = map[string]fundamentalSnapshot{}
+
+	file, err := os.Open(fundamentalsPath)
+	if err != nil {
+		return cachedFundamentals
+	}
+	defer file.Close()
+
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil || len(rows) < 2 {
+		return cachedFundamentals
+	}
+	index := map[string]int{}
+	for i, header := range rows[0] {
+		index[strings.TrimSpace(strings.ToLower(header))] = i
+	}
+	for _, row := range rows[1:] {
+		symbol := csvValue(row, index, "symbol")
+		if symbol == "" {
+			continue
+		}
+		cachedFundamentals[symbol] = fundamentalSnapshot{
+			Symbol:        symbol,
+			ROE:           parseCSVFloat(csvValue(row, index, "roe")),
+			ProfitGrowth:  parseCSVFloat(csvValue(row, index, "profit_growth")),
+			CashflowRatio: parseCSVFloat(csvValue(row, index, "cashflow_ratio")),
+			DebtRatio:     parseCSVFloat(csvValue(row, index, "debt_ratio")),
+			PEPercentile:  parseCSVFloat(csvValue(row, index, "pe_percentile")),
+			PBPercentile:  parseCSVFloat(csvValue(row, index, "pb_percentile")),
+			PSPercentile:  parseCSVFloat(csvValue(row, index, "ps_percentile")),
+			UpdatedAt:     csvValue(row, index, "updated_at"),
+		}
+	}
+	return cachedFundamentals
+}
+
+func loadEventSnapshots() map[string]eventSnapshot {
+	if eventsLoaded {
+		return cachedEvents
+	}
+	eventsLoaded = true
+	cachedEvents = map[string]eventSnapshot{}
+
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		return cachedEvents
+	}
+	defer file.Close()
+
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil || len(rows) < 2 {
+		return cachedEvents
+	}
+	index := map[string]int{}
+	for i, header := range rows[0] {
+		index[strings.TrimSpace(strings.ToLower(header))] = i
+	}
+	for _, row := range rows[1:] {
+		symbol := csvValue(row, index, "symbol")
+		if symbol == "" {
+			continue
+		}
+		cachedEvents[symbol] = eventSnapshot{
+			Symbol:       symbol,
+			EarningsFlag: parseCSVFloat(csvValue(row, index, "earnings_flag")),
+			BuybackFlag:  parseCSVFloat(csvValue(row, index, "buyback_flag")),
+			UnlockFlag:   parseCSVFloat(csvValue(row, index, "unlock_flag")),
+			InsiderFlag:  parseCSVFloat(csvValue(row, index, "insider_flag")),
+			UpdatedAt:    csvValue(row, index, "updated_at"),
+		}
+	}
+	return cachedEvents
+}
+
+func csvValue(row []string, index map[string]int, key string) string {
+	col, ok := index[key]
+	if !ok || col < 0 || col >= len(row) {
+		return ""
+	}
+	return strings.TrimSpace(row[col])
+}
+
+func parseCSVFloat(value string) float64 {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0
+	}
+	return number
+}
+
+func fundamentalOverlayScores(symbol string) (float64, float64, float64) {
+	fundamentals := loadFundamentalSnapshots()
+	events := loadEventSnapshots()
+
+	fundamental := 0.0
+	valuation := 0.0
+	event := 0.0
+
+	if snapshot, ok := fundamentals[symbol]; ok {
+		fundamental += clampFloat(snapshot.ROE/20.0, -0.20, 0.20) * 0.40
+		fundamental += clampFloat(snapshot.ProfitGrowth/30.0, -0.20, 0.20) * 0.30
+		fundamental += clampFloat(snapshot.CashflowRatio-1.0, -0.20, 0.20) * 0.20
+		fundamental -= clampFloat(snapshot.DebtRatio-0.50, -0.20, 0.20) * 0.20
+
+		avgPercentile := 0.0
+		count := 0.0
+		for _, value := range []float64{snapshot.PEPercentile, snapshot.PBPercentile, snapshot.PSPercentile} {
+			if value > 0 {
+				avgPercentile += value
+				count++
+			}
+		}
+		if count > 0 {
+			avgPercentile /= count
+			valuation = clampFloat((0.50-avgPercentile)*0.40, -0.20, 0.20)
+		}
+	}
+
+	if snapshot, ok := events[symbol]; ok {
+		event += snapshot.EarningsFlag * 0.06
+		event += snapshot.BuybackFlag * 0.05
+		event += snapshot.InsiderFlag * 0.04
+		event -= snapshot.UnlockFlag * 0.08
+		event = clampFloat(event, -0.12, 0.12)
+	}
+
+	return clampFloat(fundamental, -0.20, 0.20), clampFloat(valuation, -0.20, 0.20), clampFloat(event, -0.12, 0.12)
+}
+
 func rankCandidate(symbol string, name string, industry string, bars []marketBar, dataSource string, sourceErr string, strategy strategyConfig, portfolio portfolioConfig) (scanCandidate, error) {
 	closes := make([]float64, 0, len(bars))
 	volumes := make([]float64, 0, len(bars))
@@ -6934,10 +7117,14 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	shortReturnScore := trailingReturn(closes, min(5, len(closes)-1))
 	mediumReturnScore := trailingReturn(closes, min(20, len(closes)-1))
 	valueScore, lowVolScore, crowdingScore, qualityScore, riskScore, heatPenalty, reversalScore := candidateOverlayScores(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, trendScore, liquidityScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty)
+	fundamentalScore, valuationScore, eventScore := fundamentalOverlayScores(symbol)
 	action, strategyAlignment, strategyVotes, reason, trigger := evaluateStrategyEnsemble(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, dataSource, sourceErr, portfolio)
 	score = score*0.35 +
 		qualityScore*portfolio.QualityWeight +
 		riskScore*portfolio.RiskWeight +
+		fundamentalScore*1.05 +
+		valuationScore*0.90 +
+		eventScore*0.80 +
 		reversalScore*portfolio.ReversalWeight -
 		heatPenalty*portfolio.HeatPenaltyWeight +
 		strategyAlignment*0.50
@@ -6957,6 +7144,9 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 		ValueScore:        valueScore,
 		LowVolScore:       lowVolScore,
 		CrowdingScore:     crowdingScore,
+		FundamentalScore:  fundamentalScore,
+		ValuationScore:    valuationScore,
+		EventScore:        eventScore,
 		TrendScore:        trendScore,
 		LiquidityScore:    liquidityScore,
 		StructureScore:    structureScore,

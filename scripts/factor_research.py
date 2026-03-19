@@ -12,7 +12,17 @@ REPORTS = ROOT / "reports"
 
 
 META_COLUMNS = {"symbol", "name", "industry", "date"}
-LABEL_COLUMNS = {"label_5d", "label_10d", "label_20d"}
+LABEL_COLUMNS = {
+    "label_5d",
+    "label_10d",
+    "label_20d",
+    "excess_5d",
+    "excess_10d",
+    "excess_20d",
+    "beat_benchmark_5d",
+    "beat_benchmark_10d",
+    "beat_benchmark_20d",
+}
 
 
 def mean(values):

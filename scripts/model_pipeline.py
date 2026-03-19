@@ -27,11 +27,19 @@ def parse_args():
         ],
         help="Training label.",
     )
+    parser.add_argument(
+        "--benchmark-label",
+        default="beat_benchmark_10d",
+        choices=["beat_benchmark_5d", "beat_benchmark_10d", "beat_benchmark_20d"],
+        help="Benchmark-beating classifier label.",
+    )
     parser.add_argument("--rolling-windows", type=int, default=4, help="Rolling validation windows.")
     parser.add_argument("--go-bin", default="/usr/local/go/bin/go", help="Go binary path.")
     parser.add_argument("--python-bin", default="python3", help="Python binary path.")
     parser.add_argument("--promote-on", choices=["directional_accuracy", "rolling_directional_accuracy"], default="rolling_directional_accuracy", help="Metric used for promotion.")
+    parser.add_argument("--benchmark-promote-on", choices=["directional_accuracy", "rolling_directional_accuracy"], default="rolling_directional_accuracy", help="Metric used for classifier promotion.")
     parser.add_argument("--min-improvement", type=float, default=0.0, help="Required minimum improvement for promotion.")
+    parser.add_argument("--benchmark-min-improvement", type=float, default=0.0, help="Required minimum improvement for classifier promotion.")
     return parser.parse_args()
 
 
@@ -65,6 +73,80 @@ def copy_if_exists(src, dst):
         shutil.copy2(src, dst)
 
 
+def train_regression_candidate(args, repo, dataset_path, candidate_dir):
+    run(
+        [
+            args.python_bin,
+            "scripts/train_model.py",
+            "--dataset",
+            str(dataset_path),
+            "--label",
+            args.label,
+            "--reports-dir",
+            str(candidate_dir),
+            "--rolling-windows",
+            str(args.rolling_windows),
+        ],
+        cwd=str(repo),
+    )
+    candidate_model = read_json(candidate_dir / "linear_model.json")
+    current_model = read_json(repo / "reports" / "linear_model.json")
+    candidate_metric = metric_value(candidate_model, args.promote_on)
+    current_metric = metric_value(current_model, args.promote_on)
+    promoted = False
+    if candidate_metric is not None and (current_metric is None or candidate_metric >= current_metric + args.min_improvement):
+        promoted = True
+    if promoted:
+        copy_if_exists(candidate_dir / "linear_model.json", repo / "reports" / "linear_model.json")
+        copy_if_exists(candidate_dir / "model_train.txt", repo / "reports" / "model_train.txt")
+        copy_if_exists(candidate_dir / "model_predictions.csv", repo / "reports" / "model_predictions.csv")
+        copy_if_exists(candidate_dir / "model_rolling.txt", repo / "reports" / "model_rolling.txt")
+    return {
+        "label": args.label,
+        "metric_name": args.promote_on,
+        "candidate_metric": candidate_metric,
+        "current_metric_before": current_metric,
+        "promoted": promoted,
+    }
+
+
+def train_classifier_candidate(args, repo, dataset_path, candidate_dir):
+    run(
+        [
+            args.python_bin,
+            "scripts/train_classifier.py",
+            "--dataset",
+            str(dataset_path),
+            "--label",
+            args.benchmark_label,
+            "--reports-dir",
+            str(candidate_dir),
+            "--rolling-windows",
+            str(args.rolling_windows),
+        ],
+        cwd=str(repo),
+    )
+    candidate_model = read_json(candidate_dir / "benchmark_classifier.json")
+    current_model = read_json(repo / "reports" / "benchmark_classifier.json")
+    candidate_metric = metric_value(candidate_model, args.benchmark_promote_on)
+    current_metric = metric_value(current_model, args.benchmark_promote_on)
+    promoted = False
+    if candidate_metric is not None and (current_metric is None or candidate_metric >= current_metric + args.benchmark_min_improvement):
+        promoted = True
+    if promoted:
+        copy_if_exists(candidate_dir / "benchmark_classifier.json", repo / "reports" / "benchmark_classifier.json")
+        copy_if_exists(candidate_dir / "benchmark_classifier.txt", repo / "reports" / "benchmark_classifier.txt")
+        copy_if_exists(candidate_dir / "benchmark_classifier_predictions.csv", repo / "reports" / "benchmark_classifier_predictions.csv")
+        copy_if_exists(candidate_dir / "benchmark_classifier_rolling.txt", repo / "reports" / "benchmark_classifier_rolling.txt")
+    return {
+        "label": args.benchmark_label,
+        "metric_name": args.benchmark_promote_on,
+        "candidate_metric": candidate_metric,
+        "current_metric_before": current_metric,
+        "promoted": promoted,
+    }
+
+
 def main():
     args = parse_args()
     repo = Path(__file__).resolve().parents[1]
@@ -96,48 +178,15 @@ def main():
     copy_if_exists(dataset_path, version_dir / "training_dataset.csv")
     copy_if_exists(dataset_summary_path, version_dir / "training_dataset.txt")
 
-    run(
-        [
-            args.python_bin,
-            "scripts/train_model.py",
-            "--dataset",
-            str(dataset_path),
-            "--label",
-            args.label,
-            "--reports-dir",
-            str(candidate_dir),
-            "--rolling-windows",
-            str(args.rolling_windows),
-        ],
-        cwd=str(repo),
-    )
-
-    candidate_model = read_json(candidate_dir / "linear_model.json")
-    current_model = read_json(reports_dir / "linear_model.json")
-
-    candidate_metric = metric_value(candidate_model, args.promote_on)
-    current_metric = metric_value(current_model, args.promote_on)
-
-    promoted = False
-    if candidate_metric is not None:
-        if current_metric is None or candidate_metric >= current_metric + args.min_improvement:
-            promoted = True
-
-    if promoted:
-        copy_if_exists(candidate_dir / "linear_model.json", reports_dir / "linear_model.json")
-        copy_if_exists(candidate_dir / "model_train.txt", reports_dir / "model_train.txt")
-        copy_if_exists(candidate_dir / "model_predictions.csv", reports_dir / "model_predictions.csv")
-        copy_if_exists(candidate_dir / "model_rolling.txt", reports_dir / "model_rolling.txt")
+    regression = train_regression_candidate(args, repo, dataset_path, candidate_dir)
+    classifier = train_classifier_candidate(args, repo, dataset_path, candidate_dir)
 
     registry_entry = {
         "timestamp": timestamp,
         "from_date": args.from_date,
         "to_date": args.to_date,
-        "label": args.label,
-        "candidate_metric_name": args.promote_on,
-        "candidate_metric": candidate_metric,
-        "current_metric_before": current_metric,
-        "promoted": promoted,
+        "regression": regression,
+        "classifier": classifier,
         "version_dir": str(version_dir.relative_to(repo)),
     }
     with (reports_dir / "model_registry.jsonl").open("a", encoding="utf-8") as handle:
@@ -146,12 +195,17 @@ def main():
     summary_lines = [
         "Model Pipeline",
         f"Timestamp: {timestamp}",
-        f"Label: {args.label}",
         f"Dataset range: {args.from_date} -> {args.to_date}",
-        f"Promotion metric: {args.promote_on}",
-        f"Candidate metric: {candidate_metric}",
-        f"Current metric before: {current_metric}",
-        f"Promoted: {promoted}",
+        f"Regression label: {regression['label']}",
+        f"Regression promotion metric: {regression['metric_name']}",
+        f"Regression candidate metric: {regression['candidate_metric']}",
+        f"Regression current metric before: {regression['current_metric_before']}",
+        f"Regression promoted: {regression['promoted']}",
+        f"Classifier label: {classifier['label']}",
+        f"Classifier promotion metric: {classifier['metric_name']}",
+        f"Classifier candidate metric: {classifier['candidate_metric']}",
+        f"Classifier current metric before: {classifier['current_metric_before']}",
+        f"Classifier promoted: {classifier['promoted']}",
         f"Version dir: {version_dir.relative_to(repo)}",
     ]
     (version_dir / "pipeline_summary.txt").write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
