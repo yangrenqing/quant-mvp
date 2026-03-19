@@ -108,3 +108,10 @@ Research workspace:
 cd /Users/yangrenqing/Downloads/quant-mvp
 bash scripts/research_run.sh
 ```
+
+Background automation:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+bash scripts/install_launchd.sh
+launchctl list | rg quant-mvp
+```
