@@ -730,7 +730,7 @@ func main() {
 }
 
 func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int) error {
-	selected, err := loadSelectedAShareCandidates(strategy, portfolio, topN)
+	selected, err := loadSelectedAShareCandidates(strategy, portfolio, runtimeConfig.Regime, topN)
 	if err != nil {
 		return err
 	}
@@ -747,7 +747,7 @@ func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int)
 	return nil
 }
 
-func loadSelectedAShareCandidates(strategy strategyConfig, portfolio portfolioConfig, topN int) ([]scanCandidate, error) {
+func loadSelectedAShareCandidates(strategy strategyConfig, portfolio portfolioConfig, regime regimeConfig, topN int) ([]scanCandidate, error) {
 	if topN <= 0 {
 		topN = 10
 	}
@@ -783,18 +783,27 @@ func loadSelectedAShareCandidates(strategy strategyConfig, portfolio portfolioCo
 		return nil, errors.New("no A-share candidates were generated")
 	}
 
+	regimeLabel := "cautious"
+	if benchmarkBars, err := loadAShareBenchmarkBars(); err == nil && len(benchmarkBars) >= strategy.LongWindow {
+		regimeLabel, _ = benchmarkMarketRegime(benchmarkBars, marketBreadth(candidates), strategy.LongWindow, regime)
+	}
+
 	sort.Slice(candidates, func(i, j int) bool {
 		left, right := candidates[i], candidates[j]
 		if bucketPriority(left.Bucket) != bucketPriority(right.Bucket) {
 			return bucketPriority(left.Bucket) < bucketPriority(right.Bucket)
 		}
-		return left.Score > right.Score
+		return portfolioSelectionScore(left, portfolio, regimeLabel) > portfolioSelectionScore(right, portfolio, regimeLabel)
 	})
 
-	if topN > len(candidates) {
-		topN = len(candidates)
+	selected := selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings, portfolio, regimeLabel)
+	if len(selected) == 0 {
+		selected = candidates
 	}
-	return candidates[:topN], nil
+	if topN > len(selected) {
+		topN = len(selected)
+	}
+	return selected[:topN], nil
 }
 
 func runBacktest(strategy strategyConfig, risk riskConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) (backtestResult, error) {
@@ -945,7 +954,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		}
 
 		rankedCandidates := append([]scanCandidate(nil), candidates...)
-		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings, portfolio)
+		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings, portfolio, regimeLabel)
 		reserveCandidates := reservePortfolioCandidates(rankedCandidates, candidates, portfolio.ReserveCandidates)
 		if len(candidates) > 0 {
 			latestSelection = append([]scanCandidate(nil), candidates...)
@@ -1254,7 +1263,7 @@ func runPaperTrading(strategy strategyConfig, portfolio portfolioConfig, regime 
 		return paperAccountResult{}, fmt.Errorf("unsupported paper market: %s", market)
 	}
 
-	selected, err := loadSelectedAShareCandidates(strategy, portfolio, topN)
+	selected, err := loadSelectedAShareCandidates(strategy, portfolio, runtimeConfig.Regime, topN)
 	if err != nil {
 		return paperAccountResult{}, err
 	}
@@ -2357,14 +2366,14 @@ func benchmarkMarketRegime(history []marketBar, breadth float64, longWindow int,
 	return "risk_on", 1.0
 }
 
-func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings int, portfolio portfolioConfig) []scanCandidate {
+func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings int, portfolio portfolioConfig, regimeLabel string) []scanCandidate {
 	if len(candidates) == 0 {
 		return candidates
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
-		leftScore := portfolioSelectionScore(candidates[i], portfolio)
-		rightScore := portfolioSelectionScore(candidates[j], portfolio)
+		leftScore := portfolioSelectionScore(candidates[i], portfolio, regimeLabel)
+		rightScore := portfolioSelectionScore(candidates[j], portfolio, regimeLabel)
 		if leftScore != rightScore {
 			return leftScore > rightScore
 		}
@@ -2447,7 +2456,7 @@ func reservePortfolioCandidates(candidates []scanCandidate, selected []scanCandi
 	return reserve
 }
 
-func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig) float64 {
+func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig, regimeLabel string) float64 {
 	score := candidate.Score
 	score += candidate.QualityScore * portfolio.QualityWeight
 	score += candidate.RiskScore * portfolio.RiskWeight
@@ -2472,6 +2481,25 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 	score += candidate.StrategyAlignment * 1.50
 	score += candidate.ModelScore * 0.80
 	score += (candidate.BenchmarkModelScore - 0.50) * 0.60
+	switch regimeLabel {
+	case "risk_on":
+		score += candidate.MomentumScore * 0.40
+		score += candidate.BreakoutScore * 0.35
+		score += candidate.ModelScore * 0.25
+		score -= candidate.ValuationScore * 0.15
+	case "risk_off":
+		score += candidate.FundamentalScore * 0.35
+		score += candidate.ValuationScore * 0.30
+		score += candidate.LowVolScore * 0.30
+		score += (candidate.BenchmarkModelScore - 0.50) * 0.40
+		score -= candidate.MomentumScore * 0.45
+		score -= candidate.BreakoutScore * 0.35
+		score -= candidate.HeatPenalty * 0.40
+	default:
+		score += candidate.FundamentalScore * 0.15
+		score += candidate.ValuationScore * 0.10
+		score -= candidate.CrowdingScore * 0.10
+	}
 	if candidate.RiskPenalty > 0 {
 		score -= candidate.RiskPenalty
 	}
