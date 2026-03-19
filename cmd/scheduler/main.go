@@ -101,6 +101,10 @@ type portfolioConfig struct {
 	MinBacktestExcess      float64
 	MaxBacktestDrawdown    float64
 	LimitMoveThreshold     float64
+	QualityWeight          float64
+	RiskWeight             float64
+	HeatPenaltyWeight      float64
+	ReversalWeight         float64
 }
 
 type regimeConfig struct {
@@ -152,6 +156,10 @@ type scanCandidate struct {
 	Action             string
 	Bucket             string
 	Score              float64
+	QualityScore       float64
+	RiskScore          float64
+	HeatPenalty        float64
+	ReversalScore      float64
 	TrendScore         float64
 	LiquidityScore     float64
 	StructureScore     float64
@@ -287,6 +295,10 @@ type datasetRow struct {
 	ShortMA           float64
 	LongMA            float64
 	Score             float64
+	QualityScore      float64
+	RiskScore         float64
+	HeatPenalty       float64
+	ReversalScore     float64
 	TrendScore        float64
 	LiquidityScore    float64
 	StructureScore    float64
@@ -1053,6 +1065,10 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 				ShortMA:           candidate.ShortMA,
 				LongMA:            candidate.LongMA,
 				Score:             candidate.Score,
+				QualityScore:      candidate.QualityScore,
+				RiskScore:         candidate.RiskScore,
+				HeatPenalty:       candidate.HeatPenalty,
+				ReversalScore:     candidate.ReversalScore,
 				TrendScore:        candidate.TrendScore,
 				LiquidityScore:    candidate.LiquidityScore,
 				StructureScore:    candidate.StructureScore,
@@ -1623,6 +1639,10 @@ func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings
 
 func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig) float64 {
 	score := candidate.Score
+	score += candidate.QualityScore * portfolio.QualityWeight
+	score += candidate.RiskScore * portfolio.RiskWeight
+	score += candidate.ReversalScore * portfolio.ReversalWeight
+	score -= candidate.HeatPenalty * portfolio.HeatPenaltyWeight
 	if candidate.HasBacktest {
 		score += candidate.BacktestExcess * portfolio.BacktestExcessWeight
 		score += candidate.BacktestReturn * portfolio.BacktestReturnWeight
@@ -1642,6 +1662,72 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig)
 		score -= portfolio.WatchPenalty
 	}
 	return score
+}
+
+func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, avgVolume float64, shortReturn float64, mediumReturn float64, trendScore float64, liquidityScore float64, persistenceScore float64, breakoutScore float64, volumeTrendScore float64, riskPenalty float64) (float64, float64, float64, float64) {
+	if len(bars) == 0 {
+		return 0, 0, 0, 0
+	}
+	latest := bars[len(bars)-1]
+	closes := make([]float64, 0, len(bars))
+	for _, bar := range bars {
+		closes = append(closes, bar.Close)
+	}
+
+	qualityScore := clampFloat(trendScore*1.60+persistenceScore*1.40+liquidityScore*8.0+volumeTrendScore*1.10, -0.20, 0.35)
+
+	volatilityPenalty := 0.0
+	lookback := min(10, len(closes)-1)
+	if lookback > 0 {
+		sumMoves := 0.0
+		count := 0.0
+		for i := len(closes) - lookback; i < len(closes); i++ {
+			if i == 0 || closes[i-1] <= 0 {
+				continue
+			}
+			sumMoves += math.Abs(closes[i]/closes[i-1] - 1)
+			count++
+		}
+		if count > 0 {
+			volatilityPenalty = clampFloat(sumMoves/count, 0, 0.08)
+		}
+	}
+
+	riskScore := 0.0
+	if longMA > 0 {
+		distance := clampFloat(latest.Close/longMA-1, -0.08, 0.12)
+		if distance > 0 {
+			riskScore += distance * 0.60
+		}
+	}
+	if avgVolume > 0 {
+		riskScore += clampFloat(math.Log10(avgVolume+1)/10.0, 0, 0.08)
+	}
+	riskScore -= volatilityPenalty * 0.90
+	riskScore -= riskPenalty * 1.50
+	riskScore = clampFloat(riskScore, -0.15, 0.18)
+
+	heatPenalty := 0.0
+	if shortReturn > 0.05 {
+		heatPenalty += (shortReturn - 0.05) * 1.80
+	}
+	if mediumReturn > 0.15 {
+		heatPenalty += (mediumReturn - 0.15) * 1.20
+	}
+	heatPenalty += clampFloat(breakoutScore-0.01, 0, 0.05) * 3.0
+	heatPenalty += clampFloat(volumeTrendScore-0.02, 0, 0.06) * 2.0
+	heatPenalty = clampFloat(heatPenalty, 0, 0.25)
+
+	reversalScore := 0.0
+	threeDayReturn := trailingReturn(closes, min(3, len(closes)-1))
+	if mediumReturn > 0 && latest.Close >= longMA && latest.Close <= shortMA*1.01 {
+		reversalScore += clampFloat(-threeDayReturn, 0, 0.06) * 1.50
+		reversalScore += clampFloat(shortMA/latest.Close-1, 0, 0.04) * 1.20
+		reversalScore += clampFloat(0.08-heatPenalty, 0, 0.08) * 0.60
+	}
+	reversalScore = clampFloat(reversalScore, 0, 0.18)
+
+	return qualityScore, riskScore, heatPenalty, reversalScore
 }
 
 func applyRotationOverlay(candidates []scanCandidate) {
@@ -2325,9 +2411,9 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	textPath := filepath.Join(reportsDir, "training_dataset.txt")
 
 	var csvBuilder strings.Builder
-	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
+	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
 	for _, row := range rows {
-		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+		fmt.Fprintf(&csvBuilder, "%s,%s,%s,%s,%.4f,%.0f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
 			row.Symbol,
 			sanitizeCSV(row.Name),
 			sanitizeCSV(row.Industry),
@@ -2337,6 +2423,10 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 			row.ShortMA,
 			row.LongMA,
 			row.Score,
+			row.QualityScore,
+			row.RiskScore,
+			row.HeatPenalty,
+			row.ReversalScore,
 			row.TrendScore,
 			row.LiquidityScore,
 			row.StructureScore,
@@ -2357,7 +2447,7 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	}
 
 	var textBuilder strings.Builder
-	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 18\nLabels: label_5d, label_10d, label_20d\nCSV: %s\n\nSample Rows\n",
+	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 22\nLabels: label_5d, label_10d, label_20d\nCSV: %s\n\nSample Rows\n",
 		fromDate,
 		toDate,
 		len(rows),
@@ -2420,6 +2510,10 @@ func predictLinearModel(candidate scanCandidate) float64 {
 
 	featureValues := map[string]float64{
 		"score":               candidate.Score,
+		"quality_score":       candidate.QualityScore,
+		"risk_score":          candidate.RiskScore,
+		"heat_penalty":        candidate.HeatPenalty,
+		"reversal_score":      candidate.ReversalScore,
 		"trend_score":         candidate.TrendScore,
 		"liquidity_score":     candidate.LiquidityScore,
 		"structure_score":     candidate.StructureScore,
@@ -3065,6 +3159,30 @@ func loadConfig(path string) (config, error) {
 					return config{}, fmt.Errorf("invalid portfolio.limit_move_threshold: %w", convErr)
 				}
 				cfg.Portfolio.LimitMoveThreshold = v
+			case "quality_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.quality_weight: %w", convErr)
+				}
+				cfg.Portfolio.QualityWeight = v
+			case "risk_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.risk_weight: %w", convErr)
+				}
+				cfg.Portfolio.RiskWeight = v
+			case "heat_penalty_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.heat_penalty_weight: %w", convErr)
+				}
+				cfg.Portfolio.HeatPenaltyWeight = v
+			case "reversal_weight":
+				v, convErr := strconv.ParseFloat(value, 64)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid portfolio.reversal_weight: %w", convErr)
+				}
+				cfg.Portfolio.ReversalWeight = v
 			}
 		case "regime":
 			switch key {
@@ -3229,6 +3347,18 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Portfolio.LimitMoveThreshold <= 0 {
 		cfg.Portfolio.LimitMoveThreshold = 0.095
+	}
+	if cfg.Portfolio.QualityWeight == 0 {
+		cfg.Portfolio.QualityWeight = 1.10
+	}
+	if cfg.Portfolio.RiskWeight == 0 {
+		cfg.Portfolio.RiskWeight = 0.80
+	}
+	if cfg.Portfolio.HeatPenaltyWeight == 0 {
+		cfg.Portfolio.HeatPenaltyWeight = 1.10
+	}
+	if cfg.Portfolio.ReversalWeight == 0 {
+		cfg.Portfolio.ReversalWeight = 0.90
 	}
 	if cfg.Regime.CautiousExposure <= 0 {
 		cfg.Regime.CautiousExposure = 0.45
@@ -4312,8 +4442,14 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	trendScore, liquidityScore, structureScore, momentumScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty, score := scoreCandidate(bars, strategy.ShortWindow, strategy.LongWindow)
 	shortReturnScore := trailingReturn(closes, min(5, len(closes)-1))
 	mediumReturnScore := trailingReturn(closes, min(20, len(closes)-1))
+	qualityScore, riskScore, heatPenalty, reversalScore := candidateOverlayScores(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, trendScore, liquidityScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty)
 	action, strategyAlignment, strategyVotes, reason, trigger := evaluateStrategyEnsemble(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, dataSource, sourceErr, portfolio)
-	score += strategyAlignment
+	score = score*0.35 +
+		qualityScore*portfolio.QualityWeight +
+		riskScore*portfolio.RiskWeight +
+		reversalScore*portfolio.ReversalWeight -
+		heatPenalty*portfolio.HeatPenaltyWeight +
+		strategyAlignment*0.50
 
 	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
 	candidate := scanCandidate{
@@ -4323,6 +4459,10 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 		Action:            action,
 		Bucket:            bucket,
 		Score:             score,
+		QualityScore:      qualityScore,
+		RiskScore:         riskScore,
+		HeatPenalty:       heatPenalty,
+		ReversalScore:     reversalScore,
 		TrendScore:        trendScore,
 		LiquidityScore:    liquidityScore,
 		StructureScore:    structureScore,
@@ -4348,7 +4488,7 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	}
 	candidate.ModelScore = predictLinearModel(candidate)
 	if candidate.ModelScore != 0 {
-		candidate.Score = candidate.Score*0.65 + candidate.ModelScore*0.35
+		candidate.Score = candidate.Score*0.70 + candidate.ModelScore*0.30
 	}
 	return candidate, nil
 }
@@ -4748,7 +4888,11 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
-		fmt.Fprintf(builder, "   Score Breakdown: trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | risk_penalty %.4f\n",
+		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | risk_penalty %.4f\n",
+			candidate.QualityScore,
+			candidate.RiskScore,
+			candidate.HeatPenalty,
+			candidate.ReversalScore,
 			candidate.TrendScore,
 			candidate.LiquidityScore,
 			candidate.StructureScore,

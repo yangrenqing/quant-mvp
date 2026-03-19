@@ -8,6 +8,10 @@ from pathlib import Path
 
 DEFAULT_FEATURES = [
     "score",
+    "quality_score",
+    "risk_score",
+    "heat_penalty",
+    "reversal_score",
     "trend_score",
     "liquidity_score",
     "structure_score",

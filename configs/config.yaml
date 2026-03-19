@@ -51,6 +51,10 @@ portfolio:
   min_backtest_excess: -0.30
   max_backtest_drawdown: 0.25
   limit_move_threshold: 0.095
+  quality_weight: 1.10
+  risk_weight: 0.80
+  heat_penalty_weight: 1.10
+  reversal_weight: 0.90
 
 regime:
   cautious_exposure: 0.45
