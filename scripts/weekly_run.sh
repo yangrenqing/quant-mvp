@@ -20,6 +20,7 @@ AUTO_ROLLBACK_EDGE="${AUTO_ROLLBACK_EDGE:-0.0}"
 SKIP_MODEL="${SKIP_MODEL:-0}"
 SKIP_ROLLBACK="${SKIP_ROLLBACK:-0}"
 SKIP_HEALTH="${SKIP_HEALTH:-0}"
+SKIP_EVOLUTION="${SKIP_EVOLUTION:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,44 +29,53 @@ while [[ $# -gt 0 ]]; do
     --skip-model) SKIP_MODEL=1; shift ;;
     --skip-rollback) SKIP_ROLLBACK=1; shift ;;
     --skip-health) SKIP_HEALTH=1; shift ;;
+    --skip-evolution) SKIP_EVOLUTION=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 
-echo "[1/8] prepare research workspace"
+echo "[1/9] prepare research workspace"
 bash scripts/research_run.sh >/dev/null
 
-echo "[2/8] refresh dataset"
+echo "[2/9] refresh dataset"
 PATH="/usr/local/go/bin:$PATH" "$GO_BIN" run ./cmd/scheduler --export-dataset --from "$FROM_DATE" --to "$TO_DATE"
 
-echo "[3/8] run model pipeline"
+echo "[3/9] run model pipeline"
 if [[ "$SKIP_MODEL" != "1" ]]; then
   "$PYTHON_BIN" scripts/model_pipeline.py --from "$FROM_DATE" --to "$TO_DATE" --label "$MODEL_LABEL"
 else
   echo "skip-model enabled"
 fi
 
-echo "[4/8] refresh factor research"
+echo "[4/9] refresh factor research"
 "$PYTHON_BIN" scripts/factor_research.py --dataset reports/training_dataset.csv --label "$MODEL_LABEL"
 
-echo "[5/8] refresh shadow account"
+echo "[5/9] refresh shadow account"
 PATH="/usr/local/go/bin:$PATH" "$GO_BIN" run ./cmd/scheduler --paper-shadow-run --once --shadow-version "$SHADOW_VERSION" --top 3 --cash "$CASH" --fee-bps "$FEE_BPS" --slippage-bps "$SLIPPAGE_BPS"
 
-echo "[6/8] evaluate promotion"
+echo "[6/9] evaluate promotion"
 "$PYTHON_BIN" scripts/strategy_promote.py --candidate "$SHADOW_VERSION" --min-edge "$MIN_PROMOTION_EDGE" --min-observations "$MIN_SHADOW_OBSERVATIONS"
 
-echo "[7/8] evaluate rollback"
+echo "[7/9] evaluate rollback"
 if [[ "$SKIP_ROLLBACK" != "1" ]]; then
   "$PYTHON_BIN" scripts/strategy_auto_rollback.py --min-edge "$AUTO_ROLLBACK_EDGE"
 else
   echo "skip-rollback enabled"
 fi
 
-echo "[8/8] refresh health monitor"
+echo "[8/9] refresh health monitor"
 if [[ "$SKIP_HEALTH" != "1" ]]; then
   "$PYTHON_BIN" scripts/health_monitor.py
 else
   echo "skip-health enabled"
+fi
+
+echo "[9/9] refresh evolution report"
+if [[ "$SKIP_EVOLUTION" != "1" ]]; then
+  "$PYTHON_BIN" scripts/evolution_report.py --hours 168
+  "$PYTHON_BIN" scripts/evolution_report.py --preset overnight
+else
+  echo "skip-evolution enabled"
 fi
 
 PATH="/usr/local/go/bin:$PATH" "$GO_BIN" run ./cmd/scheduler --dashboard-only >/dev/null

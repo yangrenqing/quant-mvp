@@ -47,5 +47,7 @@ if [[ "$RUN_SHADOW" == "1" && -n "${SHADOW_VERSION}" ]]; then
 fi
 
 "$PYTHON_BIN" scripts/health_monitor.py --source intraday
+"$PYTHON_BIN" scripts/evolution_report.py --hours 24
+"$PYTHON_BIN" scripts/evolution_report.py --preset overnight
 PATH="/usr/local/go/bin:$PATH" "$GO_BIN" run ./cmd/scheduler --dashboard-only >/dev/null
 echo "intraday cycle complete"

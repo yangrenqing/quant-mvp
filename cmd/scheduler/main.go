@@ -3931,6 +3931,8 @@ func writeDashboardReports() error {
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
 		{title: "Paper Trading", path: filepath.Join(reportsDir, "paper_account.txt")},
 		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
+		{title: "Evolution Report", path: filepath.Join(reportsDir, "evolution_report.txt")},
+		{title: "Overnight Evolution", path: filepath.Join(reportsDir, "evolution_report_overnight.txt")},
 		{title: "Health Monitor", path: filepath.Join(reportsDir, "health_monitor.txt")},
 		{title: "Factor Research", path: filepath.Join(reportsDir, "factor_research.txt")},
 		{title: "Promotion Decision", path: filepath.Join(reportsDir, "strategy_promotion_latest.txt")},
@@ -3963,6 +3965,8 @@ func writeDashboardReports() error {
 	lifecycleCard := buildLifecycleSummaryCard()
 	healthCard := buildHealthSummaryCard()
 	factorCard := buildFactorSummaryCard()
+	evolutionSummaryCard := buildEvolutionSummaryCard()
+	overnightEvolutionCard := buildOvernightEvolutionSummaryCard()
 
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
@@ -3973,6 +3977,8 @@ func writeDashboardReports() error {
 	textBuilder.WriteString("Current Holdings\n" + holdingCard + "\n\n")
 	textBuilder.WriteString("Strategy Evolution\n" + evolutionCard + "\n\n")
 	textBuilder.WriteString("Lifecycle Summary\n" + lifecycleCard + "\n\n")
+	textBuilder.WriteString("Evolution Summary\n" + evolutionSummaryCard + "\n\n")
+	textBuilder.WriteString("Overnight Evolution\n" + overnightEvolutionCard + "\n\n")
 	textBuilder.WriteString("System Health\n" + healthCard + "\n\n")
 	textBuilder.WriteString("Factor Research\n" + factorCard + "\n\n")
 	for _, section := range rendered {
@@ -3995,6 +4001,8 @@ func writeDashboardReports() error {
 		{Title: "Current Holdings", Body: holdingCard},
 		{Title: "Strategy Evolution", Body: evolutionCard},
 		{Title: "Lifecycle Summary", Body: lifecycleCard},
+		{Title: "Evolution Summary", Body: evolutionSummaryCard},
+		{Title: "Overnight Evolution", Body: overnightEvolutionCard},
 		{Title: "System Health", Body: healthCard},
 		{Title: "Factor Research", Body: factorCard},
 	} {
@@ -4053,16 +4061,18 @@ func writeDashboardReports() error {
 		return err
 	}
 	payload := map[string]any{
-		"today_conclusion":   todayCard,
-		"risk_alerts":        riskCard,
-		"changes":            changeCard,
-		"strong_weak":        strongWeakCard,
-		"current_holdings":   holdingCard,
-		"strategy_evolution": evolutionCard,
-		"lifecycle_summary":  lifecycleCard,
-		"system_health":      healthCard,
-		"factor_research":    factorCard,
-		"sections":           rendered,
+		"today_conclusion":    todayCard,
+		"risk_alerts":         riskCard,
+		"changes":             changeCard,
+		"strong_weak":         strongWeakCard,
+		"current_holdings":    holdingCard,
+		"strategy_evolution":  evolutionCard,
+		"lifecycle_summary":   lifecycleCard,
+		"evolution_summary":   evolutionSummaryCard,
+		"overnight_evolution": overnightEvolutionCard,
+		"system_health":       healthCard,
+		"factor_research":     factorCard,
+		"sections":            rendered,
 	}
 	if err := writeJSONFile(jsonPath, payload); err != nil {
 		return err
@@ -4668,6 +4678,32 @@ func buildFactorSummaryCard() string {
 		return rowLine
 	}
 	return rowLine + " | " + bestLine
+}
+
+func buildEvolutionSummaryCard() string {
+	report, _ := readDashboardSection(filepath.Join(reportsDir, "evolution_report.txt"))
+	runLine := firstMatchingLine(report, []string{"Run count:", "Lifecycle events:", "Model versions built:"})
+	if runLine == "" {
+		return "演化报告尚未生成。"
+	}
+	promotionLine := firstMatchingLine(report, []string{"Regression promotions:", "Classifier promotions:", "Active vs shadow equity diff:"})
+	if promotionLine == "" || promotionLine == runLine {
+		return runLine
+	}
+	return runLine + " | " + promotionLine
+}
+
+func buildOvernightEvolutionSummaryCard() string {
+	report, _ := readDashboardSection(filepath.Join(reportsDir, "evolution_report_overnight.txt"))
+	runLine := firstMatchingLine(report, []string{"Run count:", "Lifecycle events:", "Model versions built:"})
+	if runLine == "" {
+		return "隔夜演化报告尚未生成。"
+	}
+	promotionLine := firstMatchingLine(report, []string{"Regression promotions:", "Classifier promotions:", "Active vs shadow equity diff:"})
+	if promotionLine == "" || promotionLine == runLine {
+		return runLine
+	}
+	return runLine + " | " + promotionLine
 }
 
 func latestHistoricalFileBeforeToday(runType string, fileName string) string {
