@@ -1,0 +1,6 @@
+report:
+  history_root: reports/history
+  export_json: true
+  cleanup_keep_days: 45
+  experiment_ledger: reports/experiments
+  run_index_path: reports/run_index.jsonl

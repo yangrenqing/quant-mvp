@@ -1,0 +1,4 @@
+model:
+  default_label: label_10d
+  model_path: reports/linear_model.json
+  promotion_metric: rolling_directional_accuracy

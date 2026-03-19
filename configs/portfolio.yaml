@@ -1,0 +1,42 @@
+portfolio:
+  rebalance_interval_days: 5
+  weight_drift_threshold: 0.20
+  min_holdings: 3
+  max_position_weight: 0.30
+  max_cash_share: 0.35
+  max_volatility: 0.14
+  min_average_turnover: 30000000
+  overheat_threshold: 0.08
+  max_holding_drawdown: 0.15
+  min_trend_gap: 0.03
+  stop_cooldown_days: 5
+  exit_cooldown_days: 3
+  trend_break_cooldown_days: 4
+  momentum_weight: 0.60
+  persistence_weight: 0.60
+  backtest_excess_weight: 0.35
+  backtest_return_weight: 0.15
+  backtest_drawdown_weight: 0.20
+  watch_penalty: 0.02
+  trend_strategy_enabled: true
+  breakout_enabled: false
+  pullback_enabled: false
+  trend_strategy_weight: 1.0
+  breakout_strategy_weight: 1.0
+  pullback_strategy_weight: 1.0
+  min_price: 3.0
+  min_backtest_excess: -0.30
+  max_backtest_drawdown: 0.25
+  limit_move_threshold: 0.095
+  quality_weight: 1.10
+  risk_weight: 0.80
+  heat_penalty_weight: 1.10
+  reversal_weight: 0.90
+
+regime:
+  cautious_exposure: 0.45
+  risk_off_exposure: 0.00
+  risk_off_drawdown: 0.12
+  cautious_drawdown: 0.06
+  breadth_risk_off: 0.25
+  breadth_cautious: 0.45

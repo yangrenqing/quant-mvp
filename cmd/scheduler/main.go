@@ -28,6 +28,11 @@ const aShareBenchmarkSymbol = "000300.SH"
 
 var cachedLinearModel *linearModel
 var linearModelLoaded bool
+var runtimeConfig config
+var diagnosticsState = runtimeDiagnostics{
+	ProviderFailures: map[string]int{},
+	FallbackReasons:  []string{},
+}
 
 type marketKind string
 
@@ -44,6 +49,8 @@ type config struct {
 	Risk      riskConfig
 	Portfolio portfolioConfig
 	Regime    regimeConfig
+	Model     modelConfig
+	Report    reportConfig
 }
 
 type dbConfig struct {
@@ -53,6 +60,20 @@ type dbConfig struct {
 type scheduleConfig struct {
 	DailyRun string
 	CacheTTL string
+}
+
+type modelConfig struct {
+	DefaultLabel    string
+	ModelPath       string
+	PromotionMetric string
+}
+
+type reportConfig struct {
+	HistoryRoot      string
+	ExportJSON       bool
+	CleanupKeepDays  int
+	ExperimentLedger string
+	RunIndexPath     string
 }
 
 type strategyConfig struct {
@@ -336,6 +357,15 @@ type marketSeries struct {
 	bars []marketBar
 }
 
+type runtimeDiagnostics struct {
+	CacheHits        int
+	CacheMisses      int
+	CacheStaleLoads  int
+	ProviderFailures map[string]int
+	FallbackReasons  []string
+	LastUpdated      string
+}
+
 func main() {
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 	symbolOverride := flag.String("symbol", "", "Override the configured symbol for this run")
@@ -365,6 +395,7 @@ func main() {
 	if strings.TrimSpace(*symbolOverride) != "" {
 		cfg.Strategy.Symbol = strings.TrimSpace(*symbolOverride)
 	}
+	runtimeConfig = cfg
 
 	if err := ensureSQLiteDB(cfg.DB.Path); err != nil {
 		logger.Fatalf("ensure sqlite db: %v", err)
@@ -374,6 +405,12 @@ func main() {
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		logger.Fatalf("ensure cache dir: %v", err)
+	}
+	if err := os.MkdirAll(cfg.Report.HistoryRoot, 0o755); err != nil {
+		logger.Fatalf("ensure history dir: %v", err)
+	}
+	if err := cleanupOldArtifacts(); err != nil {
+		logger.Fatalf("cleanup artifacts: %v", err)
 	}
 	if *backtest {
 		if strings.TrimSpace(cfg.Strategy.Symbol) == "" {
@@ -1855,6 +1892,7 @@ func printBacktestSummary(result backtestResult) {
 func writeBacktestReports(result backtestResult) error {
 	textPath := filepath.Join(reportsDir, "backtest_latest.txt")
 	htmlPath := filepath.Join(reportsDir, "backtest_latest.html")
+	jsonPath := reportJSONPath("backtest_latest")
 	svg := buildEquityCurveSVG(result.EquityCurve)
 
 	var tradeLines strings.Builder
@@ -1984,13 +2022,38 @@ func writeBacktestReports(result backtestResult) error {
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
 		return err
 	}
-	return nil
+	if err := writeJSONFile(jsonPath, result); err != nil {
+		return err
+	}
+	_ = appendExperimentRecord("backtest", map[string]any{
+		"symbol":        result.Symbol,
+		"from_date":     result.FromDate,
+		"to_date":       result.ToDate,
+		"fee_bps":       result.FeeBps,
+		"slippage_bps":  result.SlippageBps,
+		"initial_cash":  result.InitialCash,
+	}, map[string]any{
+		"final_equity":      result.FinalEquity,
+		"total_return":      result.TotalReturn,
+		"annualized_return": result.AnnualizedReturn,
+		"excess_return":     result.ExcessReturn,
+		"max_drawdown":      result.MaxDrawdown,
+		"win_rate":          result.WinRate,
+	})
+	return persistRunRecord("backtest_latest", map[string]any{
+		"symbol":           result.Symbol,
+		"mode":             result.Mode,
+		"total_return":     result.TotalReturn,
+		"max_drawdown":     result.MaxDrawdown,
+		"annualized_return": result.AnnualizedReturn,
+	}, []string{textPath, htmlPath, jsonPath})
 }
 
 func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64) error {
 	textPath := filepath.Join(reportsDir, "backtest_scan.txt")
 	htmlPath := filepath.Join(reportsDir, "backtest_scan.html")
 	csvPath := filepath.Join(reportsDir, "backtest_scan.csv")
+	jsonPath := reportJSONPath("backtest_scan")
 
 	var textBuilder strings.Builder
 	fmt.Fprintf(&textBuilder, "Batch Backtest %s -> %s\nInitial cash: %.2f\nFee bps: %.2f\nSlippage bps: %.2f\n\n", fromDate, toDate, initialCash, feeBps, slippageBps)
@@ -2106,7 +2169,26 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 	if err := writeCSVFile(csvPath, csvRows); err != nil {
 		return err
 	}
-	return nil
+	if err := writeJSONFile(jsonPath, results); err != nil {
+		return err
+	}
+	_ = appendExperimentRecord("batch_backtest", map[string]any{
+		"from_date": fromDate,
+		"to_date":   toDate,
+		"count":     len(results),
+	}, map[string]any{
+		"top_symbol": func() string {
+			if len(results) == 0 {
+				return ""
+			}
+			return results[0].Symbol
+		}(),
+	})
+	return persistRunRecord("backtest_scan", map[string]any{
+		"from_date": fromDate,
+		"to_date":   toDate,
+		"count":     len(results),
+	}, []string{textPath, htmlPath, csvPath, jsonPath})
 }
 
 func printPortfolioBacktestSummary(result portfolioBacktestResult) {
@@ -2156,6 +2238,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	textPath := filepath.Join(reportsDir, "portfolio_backtest.txt")
 	htmlPath := filepath.Join(reportsDir, "portfolio_backtest.html")
 	csvPath := filepath.Join(reportsDir, "portfolio_backtest.csv")
+	jsonPath := reportJSONPath("portfolio_backtest")
 
 	var latest strings.Builder
 	for i, candidate := range result.LatestSelection {
@@ -2305,6 +2388,33 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	if err := writeCSVFile(csvPath, csvRows); err != nil {
 		return err
 	}
+	if err := writeJSONFile(jsonPath, result); err != nil {
+		return err
+	}
+	_ = appendExperimentRecord("portfolio_backtest", map[string]any{
+		"from_date": result.FromDate,
+		"to_date":   result.ToDate,
+		"positions": result.Positions,
+		"regime":    result.RegimeLabel,
+	}, map[string]any{
+		"final_equity":      result.FinalEquity,
+		"total_return":      result.TotalReturn,
+		"annualized_return": result.AnnualizedReturn,
+		"benchmark_return":  result.BenchmarkReturn,
+		"excess_return":     result.ExcessReturn,
+		"max_drawdown":      result.MaxDrawdown,
+		"rebalances":        result.RebalanceCount,
+	})
+	if err := persistRunRecord("portfolio_backtest", map[string]any{
+		"from_date":     result.FromDate,
+		"to_date":       result.ToDate,
+		"regime":        result.RegimeLabel,
+		"target_exposure": result.ExposureLevel,
+		"total_return":  result.TotalReturn,
+		"max_drawdown":  result.MaxDrawdown,
+	}, []string{textPath, htmlPath, csvPath, jsonPath}); err != nil {
+		return err
+	}
 	return writeDashboardReports()
 }
 
@@ -2312,6 +2422,7 @@ func writeGridSearchReports(results []gridSearchResult, fromDate string, toDate 
 	textPath := filepath.Join(reportsDir, "grid_search.txt")
 	htmlPath := filepath.Join(reportsDir, "grid_search.html")
 	csvPath := filepath.Join(reportsDir, "grid_search.csv")
+	jsonPath := reportJSONPath("grid_search")
 
 	var textBuilder strings.Builder
 	fmt.Fprintf(&textBuilder, "Portfolio Grid Search %s -> %s\n\n", fromDate, toDate)
@@ -2403,12 +2514,34 @@ func writeGridSearchReports(results []gridSearchResult, fromDate string, toDate 
 	if err := os.WriteFile(csvPath, []byte(csvBuilder.String()), 0o644); err != nil {
 		return err
 	}
+	if err := writeJSONFile(jsonPath, results); err != nil {
+		return err
+	}
+	if len(results) > 0 {
+		_ = appendExperimentRecord("grid_search", map[string]any{
+			"from_date": fromDate,
+			"to_date":   toDate,
+		}, map[string]any{
+			"best_short_window": results[0].ShortWindow,
+			"best_long_window":  results[0].LongWindow,
+			"best_total_return": results[0].TotalReturn,
+			"best_max_drawdown": results[0].MaxDrawdown,
+		})
+	}
+	if err := persistRunRecord("grid_search", map[string]any{
+		"from_date": fromDate,
+		"to_date":   toDate,
+		"count":     len(results),
+	}, []string{textPath, htmlPath, csvPath, jsonPath}); err != nil {
+		return err
+	}
 	return writeDashboardReports()
 }
 
 func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) error {
 	csvPath := filepath.Join(reportsDir, "training_dataset.csv")
 	textPath := filepath.Join(reportsDir, "training_dataset.txt")
+	jsonPath := reportJSONPath("training_dataset")
 
 	var csvBuilder strings.Builder
 	csvBuilder.WriteString("symbol,name,industry,date,close,avg_volume,short_ma,long_ma,score,quality_score,risk_score,heat_penalty,reversal_score,trend_score,liquidity_score,structure_score,momentum_score,persistence_score,breakout_score,volume_trend_score,short_return_score,medium_return_score,rotation_score,strategy_alignment,breadth,regime_exposure,label_5d,label_10d,label_20d\n")
@@ -2474,6 +2607,27 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
 		return err
 	}
+	if err := writeJSONFile(jsonPath, map[string]any{
+		"from_date": fromDate,
+		"to_date":   toDate,
+		"rows":      len(rows),
+		"sample":    rows[:min(10, len(rows))],
+	}); err != nil {
+		return err
+	}
+	_ = appendExperimentRecord("dataset_export", map[string]any{
+		"from_date": fromDate,
+		"to_date":   toDate,
+	}, map[string]any{
+		"rows": len(rows),
+	})
+	if err := persistRunRecord("training_dataset", map[string]any{
+		"from_date": fromDate,
+		"to_date":   toDate,
+		"rows":      len(rows),
+	}, []string{textPath, csvPath, jsonPath}); err != nil {
+		return err
+	}
 	return writeDashboardReports()
 }
 
@@ -2489,7 +2643,10 @@ func getLinearModel() *linearModel {
 	}
 	linearModelLoaded = true
 
-	path := filepath.Join(reportsDir, "linear_model.json")
+	path := runtimeConfig.Model.ModelPath
+	if strings.TrimSpace(path) == "" {
+		path = filepath.Join(reportsDir, "linear_model.json")
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -2656,6 +2813,11 @@ func writeCSVFile(path string, rows [][]string) error {
 func writeDashboardReports() error {
 	textPath := filepath.Join(reportsDir, "dashboard.txt")
 	htmlPath := filepath.Join(reportsDir, "dashboard.html")
+	jsonPath := reportJSONPath("dashboard")
+
+	if err := writeDiagnosticsReports(); err != nil {
+		return err
+	}
 
 	sections := []struct {
 		title string
@@ -2665,6 +2827,7 @@ func writeDashboardReports() error {
 		{title: "A-Share Focus", path: filepath.Join(reportsDir, "a_share_focus.txt")},
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
 		{title: "Portfolio Backtest", path: filepath.Join(reportsDir, "portfolio_backtest.txt")},
+		{title: "Diagnostics", path: filepath.Join(reportsDir, "diagnostics.txt")},
 	}
 
 	type dashboardSection struct {
@@ -2682,14 +2845,36 @@ func writeDashboardReports() error {
 		})
 	}
 
+	todayCard := buildTodayConclusionCard()
+	riskCard := buildRiskAlertCard()
+	changeCard := buildChangeCard()
+
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
+	textBuilder.WriteString("Today Conclusion\n" + todayCard + "\n\n")
+	textBuilder.WriteString("Risk Alerts\n" + riskCard + "\n\n")
+	textBuilder.WriteString("Changes vs Yesterday\n" + changeCard + "\n\n")
 	for _, section := range rendered {
 		textBuilder.WriteString(section.Title + "\n")
 		if section.Stamp != "" {
 			textBuilder.WriteString("Updated: " + section.Stamp + "\n")
 		}
 		textBuilder.WriteString(section.Content + "\n\n")
+	}
+
+	var summaryCards strings.Builder
+	for _, item := range []struct {
+		Title string
+		Body  string
+	}{
+		{Title: "Today Conclusion", Body: todayCard},
+		{Title: "Risk Alerts", Body: riskCard},
+		{Title: "Changes vs Yesterday", Body: changeCard},
+	} {
+		fmt.Fprintf(&summaryCards, `<section class="summary"><h2>%s</h2><p>%s</p></section>`,
+			html.EscapeString(item.Title),
+			html.EscapeString(item.Body),
+		)
 	}
 
 	var cards strings.Builder
@@ -2714,6 +2899,9 @@ func writeDashboardReports() error {
     .wrap { max-width: 1280px; margin: 36px auto; padding: 0 20px 40px; }
     h1 { margin: 0 0 18px; font-size: 42px; }
     .lead { margin: 0 0 24px; color: var(--muted); font-size: 17px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-bottom: 18px; }
+    .summary { background: linear-gradient(180deg, #fff8ef, #f5ead8); border: 1px solid var(--border); border-radius: 18px; padding: 18px 20px; box-shadow: 0 14px 34px rgba(70, 50, 20, 0.08); }
+    .summary p { margin: 0; font-size: 15px; line-height: 1.55; color: #3a3128; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 20px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); min-height: 280px; }
     h2 { margin: 0 0 8px; font-size: 24px; }
@@ -2725,16 +2913,255 @@ func writeDashboardReports() error {
   <div class="wrap">
     <h1>Quant MVP Dashboard</h1>
     <p class="lead">Daily overview of the latest plan, focus list, market scan, and portfolio backtest.</p>
+    <div class="summary-grid">%s</div>
     <div class="grid">%s</div>
   </div>
 </body>
-</html>`, cards.String())
+</html>`, summaryCards.String(), cards.String())
 
 	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
 		return err
 	}
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
 		return err
+	}
+	payload := map[string]any{
+		"today_conclusion": todayCard,
+		"risk_alerts":      riskCard,
+		"changes":          changeCard,
+		"sections":         rendered,
+	}
+	if err := writeJSONFile(jsonPath, payload); err != nil {
+		return err
+	}
+	return persistRunRecord("dashboard", payload, []string{textPath, htmlPath, jsonPath})
+}
+
+func reportJSONPath(baseName string) string {
+	return filepath.Join(reportsDir, baseName+".json")
+}
+
+func writeJSONFile(path string, payload any) error {
+	content, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0o644)
+}
+
+func reportHistoryRoot() string {
+	root := runtimeConfig.Report.HistoryRoot
+	if strings.TrimSpace(root) == "" {
+		root = filepath.Join(reportsDir, "history")
+	}
+	return root
+}
+
+func appendJSONLine(path string, payload any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(append(content, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+func copyFile(src string, dst string) error {
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, content, 0o644)
+}
+
+func archiveFiles(runType string, files []string) (string, []string, error) {
+	dateDir := time.Now().Format("2006-01-02")
+	targetDir := filepath.Join(reportHistoryRoot(), dateDir, runType)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return "", nil, err
+	}
+	archived := make([]string, 0, len(files))
+	for _, src := range files {
+		if strings.TrimSpace(src) == "" {
+			continue
+		}
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dst := filepath.Join(targetDir, filepath.Base(src))
+		if err := copyFile(src, dst); err != nil {
+			return "", nil, err
+		}
+		archived = append(archived, dst)
+	}
+	return targetDir, archived, nil
+}
+
+func currentGitCommit() string {
+	cmd := exec.Command("git", "-C", ".", "rev-parse", "--short", "HEAD")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func persistRunRecord(runType string, summary map[string]any, files []string) error {
+	indexPath := runtimeConfig.Report.RunIndexPath
+	if strings.TrimSpace(indexPath) == "" {
+		indexPath = filepath.Join(reportsDir, "run_index.jsonl")
+	}
+	historyDir, archivedFiles, err := archiveFiles(runType, files)
+	if err != nil {
+		return err
+	}
+	record := map[string]any{
+		"run_type":     runType,
+		"generated_at": time.Now().Format(time.RFC3339),
+		"git_commit":   currentGitCommit(),
+		"history_dir":  historyDir,
+		"files":        archivedFiles,
+		"summary":      summary,
+	}
+	return appendJSONLine(indexPath, record)
+}
+
+func appendExperimentRecord(experimentType string, configValues map[string]any, metrics map[string]any) error {
+	basePath := runtimeConfig.Report.ExperimentLedger
+	if strings.TrimSpace(basePath) == "" {
+		basePath = filepath.Join(reportsDir, "experiments")
+	}
+	jsonlPath := basePath + ".jsonl"
+	csvPath := basePath + ".csv"
+	record := map[string]any{
+		"experiment_type": experimentType,
+		"recorded_at":     time.Now().Format(time.RFC3339),
+		"git_commit":      currentGitCommit(),
+		"config":          configValues,
+		"metrics":         metrics,
+	}
+	if err := appendJSONLine(jsonlPath, record); err != nil {
+		return err
+	}
+
+	header := []string{"recorded_at", "experiment_type", "git_commit", "config_json", "metrics_json"}
+	configJSON, _ := json.Marshal(configValues)
+	metricsJSON, _ := json.Marshal(metrics)
+	if _, err := os.Stat(csvPath); errors.Is(err, os.ErrNotExist) {
+		if err := writeCSVFile(csvPath, [][]string{header, {time.Now().Format(time.RFC3339), experimentType, currentGitCommit(), string(configJSON), string(metricsJSON)}}); err != nil {
+			return err
+		}
+		return nil
+	}
+	file, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	writer := csv.NewWriter(file)
+	if err := writer.Write([]string{time.Now().Format(time.RFC3339), experimentType, currentGitCommit(), string(configJSON), string(metricsJSON)}); err != nil {
+		return err
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func noteProviderFailure(provider string, reason string) {
+	if diagnosticsState.ProviderFailures == nil {
+		diagnosticsState.ProviderFailures = map[string]int{}
+	}
+	diagnosticsState.ProviderFailures[provider]++
+	if reason != "" {
+		diagnosticsState.FallbackReasons = append(diagnosticsState.FallbackReasons, fmt.Sprintf("%s: %s", provider, reason))
+	}
+	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
+}
+
+func noteCacheHit() {
+	diagnosticsState.CacheHits++
+	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
+}
+
+func noteCacheMiss() {
+	diagnosticsState.CacheMisses++
+	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
+}
+
+func noteCacheStaleLoad() {
+	diagnosticsState.CacheStaleLoads++
+	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
+}
+
+func writeDiagnosticsReports() error {
+	textPath := filepath.Join(reportsDir, "diagnostics.txt")
+	jsonPath := filepath.Join(reportsDir, "diagnostics.json")
+	var builder strings.Builder
+	builder.WriteString("Diagnostics\n\n")
+	fmt.Fprintf(&builder, "Cache hits: %d\n", diagnosticsState.CacheHits)
+	fmt.Fprintf(&builder, "Cache misses: %d\n", diagnosticsState.CacheMisses)
+	fmt.Fprintf(&builder, "Stale cache loads: %d\n", diagnosticsState.CacheStaleLoads)
+	if len(diagnosticsState.ProviderFailures) == 0 {
+		builder.WriteString("Provider failures: none\n")
+	} else {
+		builder.WriteString("Provider failures:\n")
+		keys := make([]string, 0, len(diagnosticsState.ProviderFailures))
+		for key := range diagnosticsState.ProviderFailures {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(&builder, "- %s: %d\n", key, diagnosticsState.ProviderFailures[key])
+		}
+	}
+	if len(diagnosticsState.FallbackReasons) > 0 {
+		builder.WriteString("Fallback reasons:\n")
+		limit := min(10, len(diagnosticsState.FallbackReasons))
+		for _, item := range diagnosticsState.FallbackReasons[len(diagnosticsState.FallbackReasons)-limit:] {
+			fmt.Fprintf(&builder, "- %s\n", item)
+		}
+	}
+	if err := os.WriteFile(textPath, []byte(builder.String()), 0o644); err != nil {
+		return err
+	}
+	return writeJSONFile(jsonPath, diagnosticsState)
+}
+
+func cleanupOldArtifacts() error {
+	keepDays := runtimeConfig.Report.CleanupKeepDays
+	if keepDays <= 0 {
+		return nil
+	}
+	cutoff := time.Now().AddDate(0, 0, -keepDays)
+	for _, root := range []string{reportHistoryRoot(), filepath.Join(reportsDir, "model_versions")} {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		for _, entry := range entries {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				_ = os.RemoveAll(filepath.Join(root, entry.Name()))
+			}
+		}
 	}
 	return nil
 }
@@ -2754,6 +3181,127 @@ func readDashboardSection(path string) (string, string) {
 		trimmed = "Not generated yet."
 	}
 	return trimmed, stamp
+}
+
+func buildTodayConclusionCard() string {
+	focus, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
+	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
+	firstFocus := firstMatchingLine(focus, []string{"1."})
+	regimeLine := firstMatchingLine(portfolio, []string{"Regime:", "Target exposure:", "Total return:"})
+	if firstFocus == "" && regimeLine == "" {
+		return "今天还没有完整日报，先运行 scan 和 portfolio backtest。"
+	}
+	return strings.TrimSpace(firstFocus + " " + regimeLine)
+}
+
+func buildRiskAlertCard() string {
+	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
+	diagnostics, _ := readDashboardSection(filepath.Join(reportsDir, "diagnostics.txt"))
+	alerts := make([]string, 0, 3)
+	for _, prefix := range []string{"Regime:", "Excess return:", "Max drawdown:"} {
+		if line := firstMatchingLine(portfolio, []string{prefix}); line != "" {
+			alerts = append(alerts, line)
+		}
+	}
+	if line := firstMatchingLine(diagnostics, []string{"Provider failures:", "-"}); line != "" {
+		alerts = append(alerts, "Diagnostics: "+line)
+	}
+	if len(alerts) == 0 {
+		return "当前没有明显的系统级风险告警。"
+	}
+	return strings.Join(alerts, " | ")
+}
+
+func buildChangeCard() string {
+	current, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
+	previousPath := latestHistoricalFileBeforeToday("a_share_scan", "a_share_focus.txt")
+	if previousPath == "" {
+		return "还没有昨日快照，今天起会自动归档。"
+	}
+	previousBytes, err := os.ReadFile(previousPath)
+	if err != nil {
+		return "昨日快照读取失败。"
+	}
+	currentSymbols := extractLeadingSymbols(current)
+	previousSymbols := extractLeadingSymbols(string(previousBytes))
+	added := diffStrings(currentSymbols, previousSymbols)
+	removed := diffStrings(previousSymbols, currentSymbols)
+	if len(added) == 0 && len(removed) == 0 {
+		return "关注名单与昨日相同。"
+	}
+	parts := make([]string, 0, 2)
+	if len(added) > 0 {
+		parts = append(parts, "新增: "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "移出: "+strings.Join(removed, ", "))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func latestHistoricalFileBeforeToday(runType string, fileName string) string {
+	root := reportHistoryRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	today := time.Now().Format("2006-01-02")
+	dates := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() < today {
+			dates = append(dates, entry.Name())
+		}
+	}
+	sort.Strings(dates)
+	for i := len(dates) - 1; i >= 0; i-- {
+		path := filepath.Join(root, dates[i], runType, fileName)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func extractLeadingSymbols(content string) []string {
+	lines := strings.Split(content, "\n")
+	symbols := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "1.") && !strings.HasPrefix(line, "2.") && !strings.HasPrefix(line, "3.") && !strings.HasPrefix(line, "4.") && !strings.HasPrefix(line, "5.") && !strings.HasPrefix(line, "6.") && !strings.HasPrefix(line, "7.") && !strings.HasPrefix(line, "8.") && !strings.HasPrefix(line, "9.") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			symbols = append(symbols, fields[1])
+		}
+	}
+	return symbols
+}
+
+func diffStrings(left []string, right []string) []string {
+	rightSet := map[string]struct{}{}
+	for _, item := range right {
+		rightSet[item] = struct{}{}
+	}
+	var diff []string
+	for _, item := range left {
+		if _, ok := rightSet[item]; !ok {
+			diff = append(diff, item)
+		}
+	}
+	return diff
+}
+
+func firstMatchingLine(content string, prefixes []string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(trimmed, prefix) {
+				return trimmed
+			}
+		}
+	}
+	return ""
 }
 
 func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
@@ -2894,15 +3442,32 @@ func min(a int, b int) int {
 }
 
 func loadConfig(path string) (config, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return config{}, err
+	configDir := filepath.Dir(path)
+	paths := []string{
+		path,
+		filepath.Join(configDir, "data.yaml"),
+		filepath.Join(configDir, "portfolio.yaml"),
+		filepath.Join(configDir, "model.yaml"),
+		filepath.Join(configDir, "report.yaml"),
+		filepath.Join(configDir, "local.yaml"),
+	}
+	var merged strings.Builder
+	for _, candidatePath := range paths {
+		content, err := os.ReadFile(candidatePath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return config{}, err
+		}
+		merged.Write(content)
+		merged.WriteString("\n")
 	}
 
 	var cfg config
 	var section string
 
-	for lineNumber, raw := range strings.Split(string(content), "\n") {
+	for lineNumber, raw := range strings.Split(merged.String(), "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -2936,6 +3501,36 @@ func loadConfig(path string) (config, error) {
 			}
 			if key == "cache_ttl" {
 				cfg.Schedule.CacheTTL = value
+			}
+		case "model":
+			switch key {
+			case "default_label":
+				cfg.Model.DefaultLabel = value
+			case "model_path":
+				cfg.Model.ModelPath = value
+			case "promotion_metric":
+				cfg.Model.PromotionMetric = value
+			}
+		case "report":
+			switch key {
+			case "history_root":
+				cfg.Report.HistoryRoot = value
+			case "export_json":
+				v, convErr := strconv.ParseBool(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid report.export_json: %w", convErr)
+				}
+				cfg.Report.ExportJSON = v
+			case "cleanup_keep_days":
+				v, convErr := strconv.Atoi(value)
+				if convErr != nil {
+					return config{}, fmt.Errorf("invalid report.cleanup_keep_days: %w", convErr)
+				}
+				cfg.Report.CleanupKeepDays = v
+			case "experiment_ledger":
+				cfg.Report.ExperimentLedger = value
+			case "run_index_path":
+				cfg.Report.RunIndexPath = value
 			}
 		case "strategy":
 			switch key {
@@ -3237,6 +3832,27 @@ func loadConfig(path string) (config, error) {
 	}
 	if cfg.Schedule.CacheTTL == "" {
 		cfg.Schedule.CacheTTL = "4h"
+	}
+	if cfg.Model.DefaultLabel == "" {
+		cfg.Model.DefaultLabel = "label_10d"
+	}
+	if cfg.Model.ModelPath == "" {
+		cfg.Model.ModelPath = filepath.Join(reportsDir, "linear_model.json")
+	}
+	if cfg.Model.PromotionMetric == "" {
+		cfg.Model.PromotionMetric = "rolling_directional_accuracy"
+	}
+	if cfg.Report.HistoryRoot == "" {
+		cfg.Report.HistoryRoot = filepath.Join(reportsDir, "history")
+	}
+	if cfg.Report.ExperimentLedger == "" {
+		cfg.Report.ExperimentLedger = filepath.Join(reportsDir, "experiments")
+	}
+	if cfg.Report.RunIndexPath == "" {
+		cfg.Report.RunIndexPath = filepath.Join(reportsDir, "run_index.jsonl")
+	}
+	if cfg.Report.CleanupKeepDays <= 0 {
+		cfg.Report.CleanupKeepDays = 45
 	}
 	if cfg.Strategy.Name == "" {
 		cfg.Strategy.Name = "sma-crossover"
@@ -3628,9 +4244,11 @@ func loadSymbolBars(symbol string, dataSource string, dataPath string, apiKeyEnv
 			if err == nil {
 				return bars, source, sourceErr, nil
 			}
+			noteProviderFailure("a_share", err.Error())
 			if allowCSVFallback && dataPath != "" {
 				csvBars, csvErr := loadBarsFromCSV(dataPath)
 				if csvErr == nil {
+					noteProviderFailure("csv_fallback", err.Error())
 					return csvBars, "csv", err.Error(), nil
 				}
 				return nil, "", "", fmt.Errorf("a-share providers failed: %v; csv fallback failed: %w", err, csvErr)
@@ -3644,9 +4262,11 @@ func loadSymbolBars(symbol string, dataSource string, dataPath string, apiKeyEnv
 		if err == nil {
 			return bars, "alphavantage", "", nil
 		}
+		noteProviderFailure("alphavantage", err.Error())
 		if allowCSVFallback && dataPath != "" {
 			csvBars, csvErr := loadBarsFromCSV(dataPath)
 			if csvErr == nil {
+				noteProviderFailure("csv_fallback", err.Error())
 				return csvBars, "csv", err.Error(), nil
 			}
 			return nil, "", "", fmt.Errorf("alphavantage failed: %v; csv fallback failed: %w", err, csvErr)
@@ -3657,9 +4277,11 @@ func loadSymbolBars(symbol string, dataSource string, dataPath string, apiKeyEnv
 		if err == nil {
 			return bars, source, sourceErr, nil
 		}
+		noteProviderFailure("tushare", err.Error())
 		if allowCSVFallback && dataPath != "" {
 			csvBars, csvErr := loadBarsFromCSV(dataPath)
 			if csvErr == nil {
+				noteProviderFailure("csv_fallback", err.Error())
 				return csvBars, "csv", err.Error(), nil
 			}
 			return nil, "", "", fmt.Errorf("tushare failed: %v; csv fallback failed: %w", err, csvErr)
@@ -3670,9 +4292,11 @@ func loadSymbolBars(symbol string, dataSource string, dataPath string, apiKeyEnv
 		if err == nil {
 			return bars, source, sourceErr, nil
 		}
+		noteProviderFailure("baostock", err.Error())
 		if allowCSVFallback && dataPath != "" {
 			csvBars, csvErr := loadBarsFromCSV(dataPath)
 			if csvErr == nil {
+				noteProviderFailure("csv_fallback", err.Error())
 				return csvBars, "csv", err.Error(), nil
 			}
 			return nil, "", "", fmt.Errorf("baostock failed: %v; csv fallback failed: %w", err, csvErr)
@@ -3685,9 +4309,11 @@ func loadSymbolBars(symbol string, dataSource string, dataPath string, apiKeyEnv
 		if err == nil {
 			return bars, "alphavantage", "", nil
 		}
+		noteProviderFailure("alphavantage", err.Error())
 		if allowCSVFallback && dataPath != "" {
 			csvBars, csvErr := loadBarsFromCSV(dataPath)
 			if csvErr == nil {
+				noteProviderFailure("csv_fallback", err.Error())
 				return csvBars, "csv", err.Error(), nil
 			}
 			return nil, "", "", fmt.Errorf("alphavantage failed: %v; csv fallback failed: %w", err, csvErr)
@@ -3747,8 +4373,10 @@ func loadAShareBarsWithPrimary(symbol string, primary string) ([]marketBar, stri
 func loadCachedProviderBars(provider string, symbol string, fetch func() ([]marketBar, error)) ([]marketBar, error) {
 	path := providerCachePath(provider, symbol)
 	if bars, fresh, err := loadCachedBars(path, 4*time.Hour); err == nil && fresh {
+		noteCacheHit()
 		return bars, nil
 	}
+	noteCacheMiss()
 
 	bars, err := fetch()
 	if err == nil {
@@ -3759,8 +4387,11 @@ func loadCachedProviderBars(provider string, symbol string, fetch func() ([]mark
 	}
 
 	if bars, _, cacheErr := loadCachedBars(path, 365*24*time.Hour); cacheErr == nil && len(bars) > 0 {
+		noteCacheStaleLoad()
+		noteProviderFailure(provider, err.Error())
 		return bars, nil
 	}
+	noteProviderFailure(provider, err.Error())
 	return nil, err
 }
 
@@ -3866,6 +4497,7 @@ func writePlanReports(signal strategySignal, now time.Time) error {
 	reportDate := nextTradingDateFromSignal(signal, now).Format("2006-01-02")
 	textPath := filepath.Join(reportsDir, "latest_plan.txt")
 	htmlPath := filepath.Join(reportsDir, "latest_plan.html")
+	jsonPath := reportJSONPath("latest_plan")
 
 	textContent := fmt.Sprintf(
 		"Mode: %s\nMarket date: %s\nSignal: %s\nReason: %s\nPlan for %s: %s\n",
@@ -3970,6 +4602,21 @@ func writePlanReports(signal strategySignal, now time.Time) error {
 		return err
 	}
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"mode":        signal.Mode,
+		"market_date": signal.MarketDate,
+		"signal":      signal.Action,
+		"reason":      signal.Reason,
+		"plan_date":   reportDate,
+		"plan":        signal.Plan,
+		"data_source": signal.DataSource,
+	}
+	if err := writeJSONFile(jsonPath, payload); err != nil {
+		return err
+	}
+	if err := persistRunRecord("latest_plan", payload, []string{textPath, htmlPath, jsonPath}); err != nil {
 		return err
 	}
 	return writeDashboardReports()
@@ -4723,6 +5370,8 @@ func writeAShareScanReports(candidates []scanCandidate) error {
 	htmlPath := filepath.Join(reportsDir, "a_share_scan.html")
 	focusTextPath := filepath.Join(reportsDir, "a_share_focus.txt")
 	focusHTMLPath := filepath.Join(reportsDir, "a_share_focus.html")
+	jsonPath := reportJSONPath("a_share_scan")
+	focusJSONPath := reportJSONPath("a_share_focus")
 	watch := filterCandidatesByBucket(candidates, "建议关注")
 	observe := filterCandidatesByBucket(candidates, "观望")
 	avoid := filterCandidatesByBucket(candidates, "回避")
@@ -4796,6 +5445,23 @@ func writeAShareScanReports(candidates []scanCandidate) error {
 		return err
 	}
 	if err := os.WriteFile(focusHTMLPath, []byte(focusHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(jsonPath, map[string]any{
+		"watch":   watch,
+		"observe": observe,
+		"avoid":   avoid,
+	}); err != nil {
+		return err
+	}
+	if err := writeJSONFile(focusJSONPath, watch); err != nil {
+		return err
+	}
+	if err := persistRunRecord("a_share_scan", map[string]any{
+		"watch_count":   len(watch),
+		"observe_count": len(observe),
+		"avoid_count":   len(avoid),
+	}, []string{textPath, htmlPath, focusTextPath, focusHTMLPath, jsonPath, focusJSONPath}); err != nil {
 		return err
 	}
 	return writeDashboardReports()

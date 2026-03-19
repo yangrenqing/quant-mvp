@@ -1,8 +1,13 @@
 # quant-mvp
 Minimal Go-based semi-quant trading system.
 
-Current MVP behavior:
-- loads config from `configs/config.yaml`
+Current behavior:
+- loads layered config from:
+  - `configs/config.yaml`
+  - `configs/data.yaml`
+  - `configs/portfolio.yaml`
+  - `configs/model.yaml`
+  - `configs/report.yaml`
 - auto-selects the market data provider by symbol
 - supports US equities through Alpha Vantage
 - supports A-share symbols such as `000001`, `001696`, `600519`, `688041`, and `430047` through Tushare Pro with BaoStock fallback
@@ -27,33 +32,53 @@ Current MVP behavior:
 - backtests support `--fee-bps` and `--slippage-bps`
 - backtests now include annualized return, buy-and-hold benchmark return, benchmark drawdown, and excess return
 - writes a structured batch backtest snapshot to `reports/backtest_scan.csv`
+- writes JSON exports for plan / scan / focus / backtest / portfolio / grid search / dashboard
 - enriches A-share scan and focus reports with the latest batch backtest snapshot when available
 - writes portfolio backtest reports to `reports/portfolio_backtest.txt` and `reports/portfolio_backtest.html`
 - exports model-ready factor datasets with `--export-dataset --from 2025-01-01 --to 2026-03-18`
 - includes a zero-dependency Python training script at `scripts/train_model.py`
+- archives report snapshots under `reports/history/YYYY-MM-DD/<run-type>/`
+- appends unified run metadata to `reports/run_index.jsonl`
+- appends parameter experiments to `reports/experiments.jsonl` and `reports/experiments.csv`
+- writes diagnostics to `reports/diagnostics.txt` and `reports/diagnostics.json`
+- auto-cleans old history/model artifacts based on `report.cleanup_keep_days`
 - stores signal records, execution records, and current position state in SQLite
 - runs one execution on startup
 - waits for the next configured cron time and runs again
+
+Daily workflow:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+bash scripts/daily_run.sh
+```
+
+Or with `make`:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+make help
+make scan
+make portfolio
+make dataset
+make model
+make daily
+```
 
 Model workflow:
 ```bash
 cd /Users/yangrenqing/Downloads/quant-mvp
 go run ./cmd/scheduler --export-dataset --from 2025-01-01 --to 2026-03-18
 python3 scripts/train_model.py --dataset reports/training_dataset.csv --label label_10d
-```
-
-Training outputs:
-- `reports/linear_model.json`
-- `reports/model_train.txt`
-- `reports/model_predictions.csv`
-
-Continuous learning workflow:
-```bash
-cd /Users/yangrenqing/Downloads/quant-mvp
 python3 scripts/model_pipeline.py --from 2025-01-01 --to 2026-03-18 --label label_10d
 ```
 
-Pipeline outputs:
+Key outputs:
+- `reports/linear_model.json`
+- `reports/model_train.txt`
+- `reports/model_predictions.csv`
 - `reports/model_pipeline_latest.txt`
 - `reports/model_registry.jsonl`
 - `reports/model_versions/<timestamp>/`
+- `reports/dashboard.html`
+- `reports/history/YYYY-MM-DD/...`
+- `reports/run_index.jsonl`
+- `reports/experiments.jsonl`
