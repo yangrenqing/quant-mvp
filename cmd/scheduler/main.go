@@ -3756,6 +3756,9 @@ func writeDashboardReports() error {
 	marketTextPath := filepath.Join(reportsDir, "market_overview.txt")
 	marketHTMLPath := filepath.Join(reportsDir, "market_overview.html")
 	marketJSONPath := reportJSONPath("market_overview")
+	lifecycleTextPath := filepath.Join(reportsDir, "strategy_lifecycle.txt")
+	lifecycleHTMLPath := filepath.Join(reportsDir, "strategy_lifecycle.html")
+	lifecycleJSONPath := reportJSONPath("strategy_lifecycle")
 
 	if err := writeDiagnosticsReports(); err != nil {
 		return err
@@ -3909,6 +3912,16 @@ func writeDashboardReports() error {
 		return err
 	}
 	if err := writeJSONFile(marketJSONPath, marketPayload); err != nil {
+		return err
+	}
+	lifecyclePayload, lifecycleText, lifecycleHTML := buildStrategyLifecycleReport()
+	if err := os.WriteFile(lifecycleTextPath, []byte(lifecycleText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(lifecycleHTMLPath, []byte(lifecycleHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(lifecycleJSONPath, lifecyclePayload); err != nil {
 		return err
 	}
 	if runtimeConfig.DB.Path != "" {
@@ -4559,6 +4572,115 @@ func buildMarketOverviewReport() (map[string]any, string, string) {
 	text := "Market Overview\n\nUS / Single-symbol Plan\n" + usPlan + "\n\nA-Share Focus\n" + aShareFocus + "\n"
 	htmlContent := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Market Overview</title><style>body{font-family:Georgia,serif;background:#f4efe6;color:#1f1b16}.wrap{max-width:1100px;margin:36px auto;padding:0 20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:#fffaf3;border:1px solid #d9cfbf;border-radius:18px;padding:24px}pre{white-space:pre-wrap}</style></head><body><div class="wrap"><h1>Market Overview</h1><div class="grid"><div class="card"><h2>US / Single-symbol</h2><pre>%s</pre></div><div class="card"><h2>A-Share Focus</h2><pre>%s</pre></div></div></div></body></html>`, html.EscapeString(usPlan), html.EscapeString(aShareFocus))
 	return payload, text, htmlContent
+}
+
+func buildStrategyLifecycleReport() (map[string]any, string, string) {
+	if strings.TrimSpace(runtimeConfig.DB.Path) == "" {
+		payload := map[string]any{"rows": []map[string]any{}, "events": []map[string]any{}}
+		return payload, "Strategy Lifecycle\n\nDatabase disabled.\n", "<html><body><pre>Database disabled.</pre></body></html>"
+	}
+
+	registryOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT version_name, status, parent_version, activated_at, archived_at FROM strategy_registry ORDER BY id DESC LIMIT 20;")
+	eventOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT event_type, from_version, to_version, trigger_reason, recorded_at FROM strategy_promotions ORDER BY id DESC LIMIT 20;")
+
+	type lifecycleRow struct {
+		Version       string `json:"version"`
+		Status        string `json:"status"`
+		ParentVersion string `json:"parent_version"`
+		ActivatedAt   string `json:"activated_at"`
+		ArchivedAt    string `json:"archived_at"`
+	}
+	type lifecycleEvent struct {
+		EventType string `json:"event_type"`
+		From      string `json:"from_version"`
+		To        string `json:"to_version"`
+		Reason    string `json:"reason"`
+		Recorded  string `json:"recorded_at"`
+	}
+
+	rows := make([]lifecycleRow, 0)
+	if strings.TrimSpace(registryOutput) != "" {
+		for _, line := range strings.Split(strings.TrimSpace(registryOutput), "\n") {
+			parts := strings.Split(line, "|")
+			if len(parts) != 5 {
+				continue
+			}
+			rows = append(rows, lifecycleRow{
+				Version: parts[0], Status: parts[1], ParentVersion: parts[2], ActivatedAt: parts[3], ArchivedAt: parts[4],
+			})
+		}
+	}
+	events := make([]lifecycleEvent, 0)
+	if strings.TrimSpace(eventOutput) != "" {
+		for _, line := range strings.Split(strings.TrimSpace(eventOutput), "\n") {
+			parts := strings.Split(line, "|")
+			if len(parts) != 5 {
+				continue
+			}
+			events = append(events, lifecycleEvent{
+				EventType: parts[0], From: parts[1], To: parts[2], Reason: parts[3], Recorded: parts[4],
+			})
+		}
+	}
+
+	var textBuilder strings.Builder
+	textBuilder.WriteString("Strategy Lifecycle\n\nRegistry\n")
+	if len(rows) == 0 {
+		textBuilder.WriteString("No strategy versions recorded.\n")
+	} else {
+		for i, row := range rows {
+			fmt.Fprintf(&textBuilder, "%d. %s status=%s parent=%s activated=%s archived=%s\n", i+1, row.Version, row.Status, row.ParentVersion, row.ActivatedAt, row.ArchivedAt)
+		}
+	}
+	textBuilder.WriteString("\nEvents\n")
+	if len(events) == 0 {
+		textBuilder.WriteString("No promotion events recorded.\n")
+	} else {
+		for i, event := range events {
+			fmt.Fprintf(&textBuilder, "%d. %s %s -> %s at %s reason=%s\n", i+1, event.EventType, event.From, event.To, event.Recorded, event.Reason)
+		}
+	}
+
+	var registryRows strings.Builder
+	for _, row := range rows {
+		fmt.Fprintf(&registryRows, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+			html.EscapeString(row.Version),
+			html.EscapeString(row.Status),
+			html.EscapeString(row.ParentVersion),
+			html.EscapeString(row.ActivatedAt),
+			html.EscapeString(row.ArchivedAt),
+		)
+	}
+	var eventRows strings.Builder
+	for _, event := range events {
+		fmt.Fprintf(&eventRows, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+			html.EscapeString(event.EventType),
+			html.EscapeString(event.From),
+			html.EscapeString(event.To),
+			html.EscapeString(event.Recorded),
+			html.EscapeString(event.Reason),
+		)
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strategy Lifecycle</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1200px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    table { width: 100%%; border-collapse: collapse; font-size: 15px; margin-bottom: 24px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; color: #6d6559; }
+  </style>
+</head>
+<body><div class="wrap"><div class="card"><h1>Strategy Lifecycle</h1><h2>Registry</h2><table><thead><tr><th>Version</th><th>Status</th><th>Parent</th><th>Activated</th><th>Archived</th></tr></thead><tbody>%s</tbody></table><h2>Events</h2><table><thead><tr><th>Event</th><th>From</th><th>To</th><th>Recorded</th><th>Reason</th></tr></thead><tbody>%s</tbody></table></div></div></body></html>`, registryRows.String(), eventRows.String())
+
+	payload := map[string]any{"rows": rows, "events": events}
+	return payload, textBuilder.String(), htmlContent
 }
 
 func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
