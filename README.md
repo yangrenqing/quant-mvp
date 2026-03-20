@@ -91,9 +91,9 @@ make daily
 
 `make validate-config` runs only layered runtime config validation.
 
-`make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits. `make show-check-paths` prints the same output path used by that export, along with the layered config load order and the optional final override file (`configs/local.yaml` when present).
+`make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits. `make show-check-paths` prints the same output path used by that export, along with the layered config load order, which layered config files from that order are currently present versus absent on disk, and the optional final override file (`configs/local.yaml` when present).
 
-`make show-check-paths` prints the resolved Go cache path, Python bytecode cache path, the layered config load order used to build runtime config, the optional final override file applied last when `configs/local.yaml` exists, the shell scripts syntax-checked by `make quick-check`, and the runtime config snapshot path refreshed by `make export-runtime-config`. Use it when troubleshooting `make validate-config`, `make quick-check`, or `make export-runtime-config`.
+`make show-check-paths` prints the resolved Go cache path, Python bytecode cache path, the layered config load order used to build runtime config, separate lists showing which files from that load order are currently present versus absent on disk, the optional final override file applied last when `configs/local.yaml` exists, the shell scripts syntax-checked by `make quick-check`, and the runtime config snapshot path refreshed by `make export-runtime-config`. Use it when troubleshooting `make validate-config`, `make quick-check`, or `make export-runtime-config`, especially when you need to distinguish configured load order from files currently found.
 
 `make quick-check` is the fast local preflight: it runs shell syntax checks for the scripts listed by `make show-check-paths`, Python bytecode compilation, and then `make validate-config`.
 

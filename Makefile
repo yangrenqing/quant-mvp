@@ -5,6 +5,8 @@ PYTHONPYCACHEPREFIX ?= $(CURDIR)/.cache/python
 RUNTIME_CONFIG_SNAPSHOT ?= $(CURDIR)/reports/runtime_config.json
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
+LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
+LAYERED_CONFIG_ABSENT ?= $(filter-out $(LAYERED_CONFIG_PRESENT),$(LAYERED_CONFIG_LOAD_ORDER))
 LAYERED_CONFIG_INPUTS ?= $(LAYERED_CONFIG_LOAD_ORDER) $(LAYERED_CONFIG_FINAL_OVERRIDE)
 QUICK_CHECK_SHELL_SCRIPTS ?= scripts/daily_run.sh scripts/weekly_run.sh scripts/intraday_run.sh scripts/research_run.sh
 FROM ?= 2025-01-01
@@ -22,7 +24,7 @@ help:
 	@echo "make model      # run model pipeline"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
-	@echo "make show-check-paths # print cache paths, layered config load order, optional final override, quick-check scripts, and export output"
+	@echo "make show-check-paths # print cache paths, layered config load order, present/absent config files, optional final override, quick-check scripts, and export output"
 	@echo "make quick-check # fast local checks: shell syntax, py_compile, and validate-config"
 	@echo "make daily      # run the full daily workflow"
 	@echo "make verify     # broader local preflight: Go tests plus make quick-check"
@@ -54,6 +56,8 @@ show-check-paths:
 	@echo "go build cache: $(GOCACHE)"
 	@echo "python bytecode cache: $(PYTHONPYCACHEPREFIX)"
 	@echo "layered config load order: $(LAYERED_CONFIG_LOAD_ORDER)"
+	@echo "layered config files present on disk: $(if $(strip $(LAYERED_CONFIG_PRESENT)),$(LAYERED_CONFIG_PRESENT),<none>)"
+	@echo "layered config files absent on disk: $(if $(strip $(LAYERED_CONFIG_ABSENT)),$(LAYERED_CONFIG_ABSENT),<none>)"
 	@echo "layered config optional final override: $(if $(wildcard $(LAYERED_CONFIG_FINAL_OVERRIDE)),$(LAYERED_CONFIG_FINAL_OVERRIDE),<not present>)"
 	@echo "quick-check shell scripts: $(QUICK_CHECK_SHELL_SCRIPTS)"
 	@echo "export-runtime-config output: $(RUNTIME_CONFIG_SNAPSHOT)"
