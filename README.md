@@ -115,7 +115,7 @@ Use the workflow-specific sections like this:
 - `summaries` / `structured files` → deeper review or automation
 - archive/history lines → prior-run inspection
 
-The latest and archive `open this first` entries are chosen independently, so format differences are expected:
+Latest and archive `open this first` entries are chosen independently, so format differences are expected:
 - latest usually favors HTML
 - archive may use HTML, CSV, or text by workflow
 - scan, portfolio, and dataset archive start-here paths are paired with the closest machine-readable companion
