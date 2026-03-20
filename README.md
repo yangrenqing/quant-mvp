@@ -93,7 +93,7 @@ make daily
 
 `make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits. `make show-check-paths` prints the same output path used by that export.
 
-`make show-check-paths` prints the resolved Go cache path, Python bytecode cache path, the shell scripts syntax-checked by `make quick-check`, and the runtime config snapshot path refreshed by `make export-runtime-config`. Use it when troubleshooting `make validate-config`, `make quick-check`, or `make export-runtime-config`.
+`make show-check-paths` prints the resolved Go cache path, Python bytecode cache path, the layered config input files used to build runtime config (in load order), the shell scripts syntax-checked by `make quick-check`, and the runtime config snapshot path refreshed by `make export-runtime-config`. Use it when troubleshooting `make validate-config`, `make quick-check`, or `make export-runtime-config`.
 
 `make quick-check` is the fast local preflight: it runs shell syntax checks for the scripts listed by `make show-check-paths`, Python bytecode compilation, and then `make validate-config`.
 
