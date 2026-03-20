@@ -172,6 +172,7 @@ show-output-paths:
 	}; \
 	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are independent and may differ by format; grouped workflow views split quick monitoring (scan/portfolio) from deeper review (dataset/model); below, the shared per-workflow line order is open this first → machine-readable companion → summary views → structured data/model files → archive → archive open this first → archive machine-readable companion."; \
+	echo "note: model is the one grouped latest-output exception where the human-readable latest entry is a text summary while the closest machine-readable companion is a predictions CSV rather than JSON."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
