@@ -101,7 +101,7 @@ Overview labels:
 - `overview pages` → quick human scan
 - `overview JSON` → automation view in the same order
 
-Start-here pairs:
+Start here:
 - trading day → `reports/dashboard.html` + `reports/dashboard.json`
 - market context → `reports/market_overview.html` + `reports/market_overview.json`
 - after the close → `reports/history_compare.html` + `reports/history_compare.json`
