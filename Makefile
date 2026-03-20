@@ -18,11 +18,15 @@ REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH ?= $(REPORT_DASHBOARD_OVERVIEW_PATH)
 REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH ?= $(REPORT_DASHBOARD_OVERVIEW_JSON)
 REPORT_OVERVIEW_LIVE_STATUS_PATH ?= $(REPORT_DASHBOARD_OVERVIEW_PATH)
 REPORT_OVERVIEW_RETROSPECTIVE_PATH ?= $(REPORT_HISTORY_OVERVIEW_PATH)
+REPORT_OVERVIEW_MONITORING_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_PATH)
+REPORT_OVERVIEW_MONITORING_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON)
+REPORT_OVERVIEW_REVIEW_PATHS ?= $(REPORT_HISTORY_OVERVIEW_PATH) $(REPORT_RESEARCH_SUMMARY_PATH)
+REPORT_OVERVIEW_REVIEW_MACHINE_PATHS ?= $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_OVERVIEW_ENTRY_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_HISTORY_OVERVIEW_PATH) $(REPORT_RESEARCH_SUMMARY_PATH)
 REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON) $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
-OVERVIEW_ENTRY_USE_NOTE ?= within the broad overview set, the HTML pages are best for quick human scanning and the matching JSON companions are best for automation or downstream tooling; during the trading day, start with $(REPORT_OVERVIEW_LIVE_STATUS_PATH); after the close, start with $(REPORT_OVERVIEW_RETROSPECTIVE_PATH); use $(REPORT_MARKET_OVERVIEW_PATH) for market context and $(REPORT_RESEARCH_SUMMARY_PATH) for research wrap-up; use a workflow-specific open-this-first path when you are inspecting one workflow run in detail.
+OVERVIEW_ENTRY_USE_NOTE ?= within the broad overview set, use $(REPORT_DASHBOARD_OVERVIEW_PATH) and $(REPORT_MARKET_OVERVIEW_PATH) for quick operational monitoring, and use $(REPORT_HISTORY_OVERVIEW_PATH) and $(REPORT_RESEARCH_SUMMARY_PATH) for deeper retrospective/review; the matching JSON companions mirror those same groupings for automation or downstream tooling; during the trading day, start with $(REPORT_OVERVIEW_LIVE_STATUS_PATH); after the close, start with $(REPORT_OVERVIEW_RETROSPECTIVE_PATH); use a workflow-specific open-this-first path when you are inspecting one workflow run in detail.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
@@ -109,7 +113,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) as the single best high-level overview HTML page to open first for quick human scanning with matching machine-readable $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH) for automation/downstream tooling, make the best overview starting point explicit for during the trading day vs after the close, and keep the full overview set plus per-run history/archive inspection locations and workflow-specific latest outputs for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, with one overview-first path plus the broader overview set for cross-workflow status/context, one open-this-first path per workflow for one-run detail inspection, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
+	@echo "make show-output-paths # print $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) as the single best high-level overview HTML page to open first for quick human scanning with matching machine-readable $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH) for automation/downstream tooling, make the best overview starting point explicit for during the trading day vs after the close, separate the broad overview set into quick operational monitoring pages vs deeper retrospective/review pages, and keep the full overview set plus per-run history/archive inspection locations and workflow-specific latest outputs for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, with one overview-first path plus the broader overview set for cross-workflow status/context, one open-this-first path per workflow for one-run detail inspection, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -148,8 +152,10 @@ show-output-paths:
 	print_paths "high-level overview open this first HTML page for quick human scanning + matching JSON for automation/downstream tooling:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview open this first during the trading day (live status):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH); \
 	print_paths "broad overview open this first after the close (retrospective analysis):" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH); \
-	print_paths "broad overview HTML entry points by intent for quick human scanning (live status -> dashboard, market context -> market overview, retrospective analysis -> history compare, research wrap-up -> research summary):" $(REPORT_OVERVIEW_ENTRY_PATHS); \
-	print_paths "broad overview JSON companions in the same intent order for automation/downstream tooling:" $(REPORT_OVERVIEW_MACHINE_PATHS); \
+	print_paths "broad overview HTML entry points for quick operational monitoring (dashboard, market overview):" $(REPORT_OVERVIEW_MONITORING_PATHS); \
+	print_paths "broad overview HTML entry points for deeper retrospective/review (history compare, research summary):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
+	print_paths "broad overview JSON companions for quick operational monitoring automation/downstream tooling:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
+	print_paths "broad overview JSON companions for deeper retrospective/review automation/downstream tooling:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first path:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
