@@ -6,6 +6,7 @@ SCHEDULER_CMD ?= ./cmd/scheduler
 RUNTIME_CONFIG_SNAPSHOT ?= $(CURDIR)/reports/runtime_config.json
 REPORTS_DIR ?= $(CURDIR)/reports
 REPORT_HISTORY_DIR ?= $(REPORTS_DIR)/history
+REPORT_HISTORY_OVERVIEW_PATH ?= $(REPORTS_DIR)/history_compare.html
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
@@ -87,7 +88,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected current output paths plus history/archive inspection locations for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected current output paths, per-run history/archive inspection locations, and the cross-run history overview entry point for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -121,6 +122,7 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
+	print_paths "cross-run history overview open this first path:" $(REPORT_HISTORY_OVERVIEW_PATH); \
 	print_paths "scan open this first path:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
