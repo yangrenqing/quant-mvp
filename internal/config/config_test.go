@@ -48,6 +48,32 @@ func TestLoadRejectsInvalidWindows(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMalformedConfigLine(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule\n  daily_run: \"30 15 * * 1-5\"\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil {
+		t.Fatal("expected invalid config line error")
+	}
+	if !strings.Contains(err.Error(), "invalid config line") {
+		t.Fatalf("Load() error = %v, want invalid config line", err)
+	}
+}
+
+func TestLoadRejectsInvalidTypedValueWithFieldName(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nstrategy:\n  short_window: nope\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil {
+		t.Fatal("expected invalid typed value error")
+	}
+	if !strings.Contains(err.Error(), "strategy.short_window") {
+		t.Fatalf("Load() error = %v, want concrete field name", err)
+	}
+}
+
 func TestLoadRejectsUnknownSection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nunknown_section:\n  enabled: true\n")
