@@ -15,6 +15,7 @@ REPORT_HISTORY_OVERVIEW_JSON ?= $(REPORTS_DIR)/history_compare.json
 REPORT_RESEARCH_SUMMARY_PATH ?= $(REPORTS_DIR)/research_summary.html
 REPORT_RESEARCH_SUMMARY_JSON ?= $(REPORTS_DIR)/research_summary.json
 REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH ?= $(REPORT_DASHBOARD_OVERVIEW_PATH)
+REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH ?= $(REPORT_DASHBOARD_OVERVIEW_JSON)
 REPORT_OVERVIEW_ENTRY_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_HISTORY_OVERVIEW_PATH) $(REPORT_RESEARCH_SUMMARY_PATH)
 REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON) $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
@@ -105,7 +106,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) as the single best high-level overview page to open first, alongside the full overview set and machine-readable JSON companions, plus per-run history/archive inspection locations, workflow-specific latest outputs for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, with one open-this-first path per workflow, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
+	@echo "make show-output-paths # print $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) as the single best high-level overview page to open first with matching machine-readable $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH), alongside the full overview set and JSON companions, plus per-run history/archive inspection locations, workflow-specific latest outputs for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, with one open-this-first path per workflow, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -139,8 +140,8 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
-	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
-	print_paths "high-level overview open this first page:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH); \
+	echo "note: show-output-paths starts with the single best high-level overview page and its matching machine-readable JSON companion before listing the broader overview set; current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
+	print_paths "high-level overview open this first page + matching machine-readable JSON:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview entry points for a high-level snapshot:" $(REPORT_OVERVIEW_ENTRY_PATHS); \
 	print_paths "broad overview machine-readable companions:" $(REPORT_OVERVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first path:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
