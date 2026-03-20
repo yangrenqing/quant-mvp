@@ -44,12 +44,14 @@ DATASET_COMPANION_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
 DATASET_OUTPUT_PATHS ?= $(DATASET_PRIMARY_OUTPUT_PATHS) $(DATASET_COMPANION_OUTPUT_PATHS)
 MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
 MODEL_PREDICTIONS ?= $(CURDIR)/reports/model_predictions.csv
+MODEL_CLASSIFIER_PREDICTIONS ?= $(CURDIR)/reports/benchmark_classifier_predictions.csv
 MODEL_REGRESSION_JSON ?= $(CURDIR)/reports/linear_model.json
 MODEL_CLASSIFIER_JSON ?= $(CURDIR)/reports/benchmark_classifier.json
+MODEL_REGISTRY_LOG ?= $(CURDIR)/reports/model_registry.jsonl
 MODEL_VERSIONS_DIR ?= $(CURDIR)/reports/model_versions
 MODEL_RECOMMENDED_OUTPUT_PATH ?= $(MODEL_PIPELINE_REPORT)
 MODEL_PRIMARY_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
-MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON)
+MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
 MODEL_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS) $(MODEL_VERSIONS_DIR)
 MODEL_LATEST_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS)
 MODEL_HISTORY_OUTPUT_PATHS ?= $(MODEL_VERSIONS_DIR)
@@ -66,7 +68,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected generated artifacts for scan (main report plus focus-only shortlist), portfolio (text plus HTML/JSON/CSV companions), dataset, and model, plus one open-this-first artifact per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected generated artifacts for scan (main report plus focus-only shortlist), portfolio (text plus HTML/JSON/CSV companions), dataset, and model (current/latest text plus CSV/JSON/JSONL companions), plus one open-this-first artifact per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
