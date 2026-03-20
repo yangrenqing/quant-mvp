@@ -51,6 +51,8 @@ DATASET_OUTPUT_PATHS ?= $(DATASET_PRIMARY_OUTPUT_PATHS) $(DATASET_COMPANION_OUTP
 DATASET_HUMAN_OUTPUT_PATHS ?= $(DATASET_EXPORT_TEXT)
 DATASET_MACHINE_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
 MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
+MODEL_TRAIN_REPORT ?= $(CURDIR)/reports/model_train.txt
+MODEL_CLASSIFIER_REPORT ?= $(CURDIR)/reports/benchmark_classifier.txt
 MODEL_PREDICTIONS ?= $(CURDIR)/reports/model_predictions.csv
 MODEL_CLASSIFIER_PREDICTIONS ?= $(CURDIR)/reports/benchmark_classifier_predictions.csv
 MODEL_REGRESSION_JSON ?= $(CURDIR)/reports/linear_model.json
@@ -60,9 +62,10 @@ MODEL_VERSIONS_DIR ?= $(CURDIR)/reports/model_versions
 MODEL_RECOMMENDED_OUTPUT_PATH ?= $(MODEL_PIPELINE_REPORT)
 MODEL_PRIMARY_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
 MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
-MODEL_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS) $(MODEL_VERSIONS_DIR)
-MODEL_LATEST_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS)
-MODEL_HUMAN_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
+MODEL_ADDITIONAL_SUMMARY_OUTPUT_PATHS ?= $(MODEL_TRAIN_REPORT) $(MODEL_CLASSIFIER_REPORT)
+MODEL_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_ADDITIONAL_SUMMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS) $(MODEL_VERSIONS_DIR)
+MODEL_LATEST_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_ADDITIONAL_SUMMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS)
+MODEL_HUMAN_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_ADDITIONAL_SUMMARY_OUTPUT_PATHS)
 MODEL_MACHINE_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
 MODEL_HISTORY_OUTPUT_PATHS ?= $(MODEL_VERSIONS_DIR)
 FROM ?= 2025-01-01
@@ -78,7 +81,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected generated artifacts for scan, portfolio, dataset, and model, grouped into human-readable vs machine-readable outputs, plus one open-this-first artifact per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected generated artifacts for scan, portfolio, dataset, and model, grouped into human-readable vs machine-readable outputs (including the current/latest model text summaries), plus one open-this-first artifact per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
