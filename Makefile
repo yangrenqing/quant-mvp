@@ -113,7 +113,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) as the single best high-level overview HTML page to open first for quick human scanning with matching machine-readable $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH) for automation/downstream tooling, make the best overview starting point explicit for during the trading day vs after the close, separate the broad overview set into quick operational monitoring pages vs deeper narrative/review pages, keep the broad overview HTML quick-scan lists and matching JSON automation lists in the same order for easy visual pairing, and keep the full overview set plus per-run history/archive inspection locations and workflow-specific latest outputs for scan, portfolio, dataset, and model, where each workflow-specific open-this-first path is the quickest latest-output entry point during active monitoring and the first place to check right after that workflow completes while the summary/structured/archive lists support deeper follow-up, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
+	@echo "make show-output-paths # print $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) as the single best high-level overview HTML page to open first for quick human scanning with matching machine-readable $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH) for automation/downstream tooling, make the best overview starting point explicit for during the trading day vs after the close, separate the broad overview set into quick operational monitoring pages vs deeper narrative/review pages, keep the broad overview HTML quick-scan lists and matching JSON automation lists in the same order for easy visual pairing, and keep the full overview set plus per-run history/archive inspection locations and workflow-specific latest outputs for scan, portfolio, dataset, and model, where scan/portfolio open-this-first latest paths are framed for quick operational monitoring and the immediate post-run check while dataset/model open-this-first latest paths are framed for deeper review and the immediate post-run check, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -149,7 +149,7 @@ show-output-paths:
 	}; \
 	echo "note: show-output-paths starts with the single best high-level overview page and its matching machine-readable JSON companion, then calls out the best broad overview starting page for during the trading day vs after the close before listing the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
-	echo "note: in each workflow-specific section below, the single 'open this first' path is the quickest latest-output entry point while that workflow is active and the first place to check immediately after it completes; use the summary views and structured data/model files lists for deeper follow-up or automation inputs, and use the history/archive paths when you need an archived run."; \
+	echo "note: in each workflow-specific section below, keep the single 'open this first' path as the first place to check immediately after that workflow completes; for scan and portfolio, that latest path is framed for quick operational monitoring, while dataset and model latest paths are framed for deeper review; use the summary views and structured data/model files lists for deeper follow-up or automation inputs, and use the history/archive paths when you need an archived run."; \
 	print_paths "high-level overview open this first HTML page for quick human scanning + matching JSON for automation/downstream tooling:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview open this first during the trading day (live status):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH); \
 	print_paths "broad overview open this first after the close (retrospective analysis):" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH); \
@@ -157,24 +157,24 @@ show-output-paths:
 	print_paths "broad overview HTML entry points for deeper narrative/review and quick human scanning (history compare, research summary; pair line 1 with line 1 in the matching JSON list):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "matching broad overview JSON companions for quick operational monitoring automation/downstream tooling, in the same order as the HTML list above for line-for-line visual pairing:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
 	print_paths "matching broad overview JSON companions for deeper narrative/review automation/downstream tooling, in the same order as the HTML list above for line-for-line visual pairing:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "scan open this first path for active monitoring and the immediate post-run check:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan open this first path for quick operational monitoring and the immediate post-run check:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist summary views:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist structured data/model files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan timestamped history/archive pattern:" $(SCAN_HISTORY_OUTPUT_PATHS); \
 	print_paths "scan history/archive open this first file:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio open this first path for active monitoring and the immediate post-run check:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio open this first path for quick operational monitoring and the immediate post-run check:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "portfolio summary views:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
 	print_paths "portfolio structured data/model files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
 	print_paths "portfolio timestamped history/archive pattern:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
 	print_paths "portfolio history/archive open this first file:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset open this first path for active monitoring and the immediate post-run check:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset open this first path for deeper review and the immediate post-run check:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "dataset summary views:" $(DATASET_HUMAN_OUTPUT_PATHS); \
 	print_paths "dataset structured data/model files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
 	print_paths "dataset timestamped history/archive pattern:" $(DATASET_HISTORY_OUTPUT_PATHS); \
 	print_paths "dataset history/archive open this first file:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "model open this first path for active monitoring and the immediate post-run check:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "model open this first path for deeper review and the immediate post-run check:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "model current/latest summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
 	print_paths "model current/latest structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
 	print_paths "model generated history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
