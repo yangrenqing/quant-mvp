@@ -28,8 +28,8 @@ REPORT_OVERVIEW_ENTRY_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET
 REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON) $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
-OVERVIEW_ENTRY_USE_NOTE ?= within the broad overview set, use $(REPORT_DASHBOARD_OVERVIEW_PATH) and $(REPORT_MARKET_OVERVIEW_PATH) for quick operational monitoring, and use $(REPORT_HISTORY_OVERVIEW_PATH) and $(REPORT_RESEARCH_SUMMARY_PATH) for deeper narrative/review; during the trading day, start with $(REPORT_OVERVIEW_LIVE_STATUS_PATH) plus $(REPORT_DASHBOARD_OVERVIEW_JSON); for market context, start with $(REPORT_MARKET_OVERVIEW_PATH) plus $(REPORT_MARKET_OVERVIEW_JSON); after the close, start with $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) plus $(REPORT_HISTORY_OVERVIEW_JSON); for research wrap-up, start with $(REPORT_RESEARCH_SUMMARY_PATH) plus $(REPORT_RESEARCH_SUMMARY_JSON); use a workflow-specific open-this-first path when you are actively monitoring one workflow or checking it immediately after that workflow completes.
-OVERVIEW_GROUP_PAIRING_NOTE ?= grouped overview HTML labels are for quick human scanning; grouped JSON labels are for automation/downstream tooling; JSON stays in the same order as HTML for line-for-line pairing.
+OVERVIEW_ENTRY_USE_NOTE ?= use $(REPORT_DASHBOARD_OVERVIEW_PATH) and $(REPORT_MARKET_OVERVIEW_PATH) for quick operational monitoring, and $(REPORT_HISTORY_OVERVIEW_PATH) and $(REPORT_RESEARCH_SUMMARY_PATH) for deeper narrative/review; trading day: $(REPORT_OVERVIEW_LIVE_STATUS_PATH) plus $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); market context: $(REPORT_MARKET_OVERVIEW_PATH) plus $(REPORT_MARKET_OVERVIEW_JSON); after the close: $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) plus $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); research wrap-up: $(REPORT_RESEARCH_SUMMARY_PATH) plus $(REPORT_RESEARCH_SUMMARY_JSON); use a workflow-specific open-this-first path when you are actively monitoring one workflow or checking it immediately after that workflow completes.
+OVERVIEW_GROUP_PAIRING_NOTE ?= grouped overview HTML is for quick human scanning; grouped JSON is for automation/downstream tooling; JSON stays in HTML order for line-for-line pairing.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
@@ -157,47 +157,47 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
-	echo "note: show-output-paths starts with the single best high-level overview page and its matching machine-readable JSON companion, then calls out the explicit broad overview start-here pairings for live status, market context, retrospective analysis, and research wrap-up before listing the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
+	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
-	echo "note: in each workflow-specific section below, keep the single 'open this first' path as the first place to check immediately after that workflow completes; for scan and portfolio, that latest path is framed for quick operational monitoring, while dataset and model latest paths are framed for deeper review; the next line under each latest or archive-first path shows the closest machine-readable companion; use the summary views and structured data/model files lists for deeper follow-up or automation inputs, and use the history/archive paths when you need an archived run."; \
-	print_paths "high-level overview open this first HTML page for quick human scanning + matching JSON for automation/downstream tooling:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "broad overview open this first during the trading day (live status) + matching JSON:" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
-	print_paths "broad overview open this first for market context + matching JSON:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
-	print_paths "broad overview open this first after the close (retrospective analysis) + matching JSON:" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
-	print_paths "broad overview open this first for research wrap-up + matching JSON:" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
+	echo "note: in each workflow-specific section, start with 'open this first'; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; the next line gives the closest machine-readable companion; use the summary views and structured data/model files lists for deeper follow-up or automation, and history/archive paths for archived runs."; \
+	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
+	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
+	print_paths "broad overview start here after the close (retrospective analysis, HTML + JSON):" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
+	print_paths "broad overview start here for research wrap-up (HTML + JSON):" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
 	echo "note: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
 	print_paths "broad overview quick operational monitoring pages (HTML):" $(REPORT_OVERVIEW_MONITORING_PATHS); \
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
-	print_paths "broad overview quick operational monitoring companions (JSON):" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
-	print_paths "broad overview deeper narrative/review companions (JSON):" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "scan open this first path for quick operational monitoring and the immediate post-run check:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan matching latest machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
+	print_paths "broad overview deeper narrative/review JSON companions:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
+	print_paths "scan open this first for quick monitoring/post-run checks:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan latest machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist summary views:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist structured data/model files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
-	print_paths "scan timestamped history/archive pattern:" $(SCAN_HISTORY_OUTPUT_PATHS); \
-	print_paths "scan history/archive open this first file:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan history/archive matching machine-readable companion:" $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "portfolio open this first path for quick operational monitoring and the immediate post-run check:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio matching latest machine-readable companion:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "scan archive pattern:" $(SCAN_HISTORY_OUTPUT_PATHS); \
+	print_paths "scan archive open this first:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan archive machine-readable companion:" $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "portfolio open this first for quick monitoring/post-run checks:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio latest machine-readable companion:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "portfolio summary views:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
 	print_paths "portfolio structured data/model files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
-	print_paths "portfolio timestamped history/archive pattern:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
-	print_paths "portfolio history/archive open this first file:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio history/archive matching machine-readable companion:" $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "dataset open this first path for deeper review and the immediate post-run check:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset matching latest machine-readable companion (alternate structured form):" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "portfolio archive pattern:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
+	print_paths "portfolio archive open this first:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio archive machine-readable companion:" $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "dataset open this first for deeper review/post-run checks:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset latest machine-readable companion (alternate structured form):" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "dataset summary views:" $(DATASET_HUMAN_OUTPUT_PATHS); \
 	print_paths "dataset structured data/model files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
-	print_paths "dataset timestamped history/archive pattern:" $(DATASET_HISTORY_OUTPUT_PATHS); \
-	print_paths "dataset history/archive open this first file:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset history/archive matching machine-readable companion (alternate structured form):" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "model open this first path for deeper review and the immediate post-run check:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "model matching latest machine-readable companion:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "dataset archive pattern:" $(DATASET_HISTORY_OUTPUT_PATHS); \
+	print_paths "dataset archive open this first:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset archive machine-readable companion (alternate structured form):" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "model open this first for deeper review/post-run checks:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "model latest machine-readable companion:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "model current/latest summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
 	print_paths "model current/latest structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
-	print_paths "model generated history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
+	print_paths "model history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
 	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
