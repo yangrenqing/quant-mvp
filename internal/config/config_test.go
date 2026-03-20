@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,32 @@ func TestLoadRejectsInvalidWindows(t *testing.T) {
 
 	if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil {
 		t.Fatal("expected invalid short/long window error")
+	}
+}
+
+func TestLoadRejectsUnknownSection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nunknown_section:\n  enabled: true\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil {
+		t.Fatal("expected unknown section error")
+	}
+	if !strings.Contains(err.Error(), `unknown config section "unknown_section"`) {
+		t.Fatalf("Load() error = %v, want unknown section name", err)
+	}
+}
+
+func TestLoadRejectsUnknownKeyWithinKnownSection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\n  unexpected_key: true\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil {
+		t.Fatal("expected unknown key error")
+	}
+	if !strings.Contains(err.Error(), `unknown config key "unexpected_key" in section "schedule"`) {
+		t.Fatalf("Load() error = %v, want unknown key and section name", err)
 	}
 }
 

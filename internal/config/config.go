@@ -191,6 +191,9 @@ func Load(path string) (Config, error) {
 			}
 			if strings.HasSuffix(line, ":") {
 				section = strings.TrimSuffix(line, ":")
+				if !isKnownSection(section) {
+					return Config{}, fmt.Errorf("parse %s line %d: unknown config section %q", candidatePath, lineNumber+1, section)
+				}
 				continue
 			}
 			parts := strings.SplitN(line, ":", 2)
@@ -213,13 +216,19 @@ func Load(path string) (Config, error) {
 func applyValue(cfg *Config, section string, key string, value string) error {
 	switch section {
 	case "app":
-		if key == "name" {
+		switch key {
+		case "name":
 			cfg.AppName = value
 			cfg.App.Name = value
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "db":
-		if key == "path" {
+		switch key {
+		case "path":
 			cfg.DB.Path = value
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "schedule":
 		switch key {
@@ -227,6 +236,8 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 			cfg.Schedule.DailyRun = value
 		case "cache_ttl":
 			cfg.Schedule.CacheTTL = value
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "strategy":
 		switch key {
@@ -252,6 +263,8 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 				return fmt.Errorf("invalid strategy.long_window: %w", err)
 			}
 			cfg.Strategy.LongWindow = v
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "risk":
 		switch key {
@@ -273,6 +286,8 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 				return fmt.Errorf("invalid risk.skip_repeat_signal: %w", err)
 			}
 			cfg.Risk.SkipRepeatSignal = v
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "portfolio":
 		return applyPortfolioValue(cfg, key, value)
@@ -314,6 +329,8 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 				return fmt.Errorf("invalid regime.breadth_cautious: %w", err)
 			}
 			cfg.Regime.BreadthCautious = v
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "model":
 		switch key {
@@ -349,6 +366,8 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 			cfg.Model.MinShadowObservations = v
 		case "shadow_version":
 			cfg.Model.ShadowVersion = value
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "health":
 		switch key {
@@ -382,6 +401,8 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 				return fmt.Errorf("invalid health.notify_on_critical: %w", err)
 			}
 			cfg.Health.NotifyOnCritical = v
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "report":
 		switch key {
@@ -403,9 +424,13 @@ func applyValue(cfg *Config, section string, key string, value string) error {
 			cfg.Report.ExperimentLedger = value
 		case "run_index_path":
 			cfg.Report.RunIndexPath = value
+		default:
+			return unknownConfigKey(section, key)
 		}
 	case "market":
 		return applyMarketValue(cfg, key, value)
+	default:
+		return fmt.Errorf("unknown config section %q", section)
 	}
 	return nil
 }
@@ -516,6 +541,8 @@ func applyPortfolioValue(cfg *Config, key string, value string) error {
 			return fmt.Errorf("invalid portfolio.reserve_candidates: %w", err)
 		}
 		cfg.Portfolio.ReserveCandidates = v
+	default:
+		return unknownConfigKey("portfolio", key)
 	}
 	return nil
 }
@@ -546,8 +573,23 @@ func applyMarketValue(cfg *Config, key string, value string) error {
 			return fmt.Errorf("invalid market.ipo_uncapped_trading_days: %w", err)
 		}
 		cfg.Market.IPOUncappedTradingDays = v
+	default:
+		return unknownConfigKey("market", key)
 	}
 	return nil
+}
+
+func isKnownSection(section string) bool {
+	switch section {
+	case "app", "db", "schedule", "strategy", "risk", "portfolio", "regime", "model", "health", "report", "market":
+		return true
+	default:
+		return false
+	}
+}
+
+func unknownConfigKey(section string, key string) error {
+	return fmt.Errorf("unknown config key %q in section %q", key, section)
 }
 
 func assignFloat(value string, name string, target *float64) error {
