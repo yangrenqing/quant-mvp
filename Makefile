@@ -193,32 +193,32 @@ show-output-paths:
 	print_paths "workflow archive/history: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
 	print_paths "workflow archive/history machine-readable: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
-	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
-	print_paths "scan focus-only shortlist summary views:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
-	print_paths "scan focus-only shortlist structured data/model files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan machine-readable:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "scan summary:" $(SCAN_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan structured:" $(SCAN_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan focus shortlist summary:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan focus shortlist structured:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan archive:" $(SCAN_HISTORY_OUTPUT_PATHS); \
-	print_paths "scan archive open this first:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan archive machine-readable companion:" $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "scan archive start here:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan archive machine-readable:" $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "portfolio open this first:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio machine-readable companion:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "portfolio summary views:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
-	print_paths "portfolio structured data/model files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
+	print_paths "portfolio machine-readable:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "portfolio summary:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
+	print_paths "portfolio structured:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
 	print_paths "portfolio archive:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
-	print_paths "portfolio archive open this first:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio archive machine-readable companion:" $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "portfolio archive start here:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio archive machine-readable:" $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "dataset open this first:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset machine-readable companion:" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "dataset summary views:" $(DATASET_HUMAN_OUTPUT_PATHS); \
-	print_paths "dataset structured data/model files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
+	print_paths "dataset machine-readable:" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "dataset summary:" $(DATASET_HUMAN_OUTPUT_PATHS); \
+	print_paths "dataset structured:" $(DATASET_MACHINE_OUTPUT_PATHS); \
 	print_paths "dataset archive:" $(DATASET_HISTORY_OUTPUT_PATHS); \
-	print_paths "dataset archive open this first:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset archive machine-readable companion:" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "dataset archive start here:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset archive machine-readable:" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "model open this first:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "model machine-readable companion:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "model summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
-	print_paths "model structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
+	print_paths "model machine-readable:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "model summary:" $(MODEL_HUMAN_OUTPUT_PATHS); \
+	print_paths "model structured:" $(MODEL_MACHINE_OUTPUT_PATHS); \
 	print_paths "model archive:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
