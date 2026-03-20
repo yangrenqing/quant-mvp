@@ -81,6 +81,7 @@ make scan
 make portfolio
 make dataset
 make model
+make validate-config
 make daily
 ```
 

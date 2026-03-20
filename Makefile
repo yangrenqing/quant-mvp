@@ -4,13 +4,14 @@ FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
 
-.PHONY: help scan portfolio dataset model daily verify
+.PHONY: help scan portfolio dataset model validate-config daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
+	@echo "make validate-config # validate layered runtime config"
 	@echo "make daily      # run the full daily workflow"
 	@echo "make verify     # run Go tests, script smoke checks, and config validation"
 
@@ -26,6 +27,9 @@ dataset:
 model:
 	$(PYTHON) scripts/model_pipeline.py --from $(FROM) --to $(TO) --label label_10d
 
+validate-config:
+	PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
+
 daily:
 	bash scripts/daily_run.sh
 
@@ -36,4 +40,4 @@ verify:
 	bash -n scripts/intraday_run.sh
 	bash -n scripts/research_run.sh
 	$(PYTHON) -m py_compile scripts/*.py
-	PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
+	$(MAKE) validate-config
