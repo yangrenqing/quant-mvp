@@ -104,7 +104,10 @@ The workflow-specific area begins with compact grouped quick-monitoring versus d
 
 Within each per-workflow section, the helper uses one shared order: `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present.
 
-Use the workflow-specific `open this first` path when you are actively monitoring one workflow or checking it immediately after completion. Use the `summaries` plus `structured files` lists for deeper follow-up or automation inputs. Use the archive/history lines when you need a prior run.
+Use the workflow-specific sections like this:
+- `open this first` → active monitoring or immediate post-run check
+- `summaries` / `structured files` → deeper follow-up or automation inputs
+- archive/history lines → prior-run inspection
 
 The latest and archive `open this first` entries are chosen independently, so different formats are intentional. Latest usually favors HTML; archive may favor HTML, CSV, or text depending on the workflow. For scan, portfolio, and dataset, the archive start-here path is paired with its closest machine-readable companion. For model, the latest human-readable entry is a text summary, its closest machine-readable companion is the predictions CSV rather than JSON, and history lives under `reports/model_versions/`.
 
