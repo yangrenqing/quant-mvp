@@ -26,7 +26,11 @@ SCAN_RECOMMENDED_OUTPUT_PATH ?= $(SCAN_REPORT_HTML)
 SCAN_PRIMARY_OUTPUT_PATHS ?= $(SCAN_REPORT_TEXT)
 SCAN_COMPANION_OUTPUT_PATHS ?= $(SCAN_REPORT_HTML) $(SCAN_REPORT_JSON)
 SCAN_OUTPUT_PATHS ?= $(SCAN_PRIMARY_OUTPUT_PATHS) $(SCAN_COMPANION_OUTPUT_PATHS)
+SCAN_HUMAN_OUTPUT_PATHS ?= $(SCAN_REPORT_TEXT) $(SCAN_REPORT_HTML)
+SCAN_MACHINE_OUTPUT_PATHS ?= $(SCAN_REPORT_JSON)
 SCAN_FOCUS_SHORTLIST_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_TEXT) $(SCAN_FOCUS_SHORTLIST_HTML) $(SCAN_FOCUS_SHORTLIST_JSON)
+SCAN_FOCUS_HUMAN_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_TEXT) $(SCAN_FOCUS_SHORTLIST_HTML)
+SCAN_FOCUS_MACHINE_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_JSON)
 PORTFOLIO_REPORT_TEXT ?= $(CURDIR)/reports/portfolio_backtest.txt
 PORTFOLIO_REPORT_HTML ?= $(CURDIR)/reports/portfolio_backtest.html
 PORTFOLIO_REPORT_JSON ?= $(CURDIR)/reports/portfolio_backtest.json
@@ -35,6 +39,8 @@ PORTFOLIO_RECOMMENDED_OUTPUT_PATH ?= $(PORTFOLIO_REPORT_HTML)
 PORTFOLIO_PRIMARY_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT)
 PORTFOLIO_COMPANION_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_HTML) $(PORTFOLIO_REPORT_JSON) $(PORTFOLIO_REPORT_CSV)
 PORTFOLIO_OUTPUT_PATHS ?= $(PORTFOLIO_PRIMARY_OUTPUT_PATHS) $(PORTFOLIO_COMPANION_OUTPUT_PATHS)
+PORTFOLIO_HUMAN_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT) $(PORTFOLIO_REPORT_HTML)
+PORTFOLIO_MACHINE_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_JSON) $(PORTFOLIO_REPORT_CSV)
 DATASET_EXPORT_CSV ?= $(CURDIR)/reports/training_dataset.csv
 DATASET_EXPORT_TEXT ?= $(CURDIR)/reports/training_dataset.txt
 DATASET_EXPORT_JSON ?= $(CURDIR)/reports/training_dataset.json
@@ -42,6 +48,8 @@ DATASET_RECOMMENDED_OUTPUT_PATH ?= $(DATASET_EXPORT_CSV)
 DATASET_PRIMARY_OUTPUT_PATHS ?= $(DATASET_EXPORT_TEXT)
 DATASET_COMPANION_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
 DATASET_OUTPUT_PATHS ?= $(DATASET_PRIMARY_OUTPUT_PATHS) $(DATASET_COMPANION_OUTPUT_PATHS)
+DATASET_HUMAN_OUTPUT_PATHS ?= $(DATASET_EXPORT_TEXT)
+DATASET_MACHINE_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
 MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
 MODEL_PREDICTIONS ?= $(CURDIR)/reports/model_predictions.csv
 MODEL_CLASSIFIER_PREDICTIONS ?= $(CURDIR)/reports/benchmark_classifier_predictions.csv
@@ -54,6 +62,8 @@ MODEL_PRIMARY_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
 MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
 MODEL_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS) $(MODEL_VERSIONS_DIR)
 MODEL_LATEST_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS)
+MODEL_HUMAN_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
+MODEL_MACHINE_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
 MODEL_HISTORY_OUTPUT_PATHS ?= $(MODEL_VERSIONS_DIR)
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
@@ -68,7 +78,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected generated artifacts for scan (main report plus focus-only shortlist), portfolio (text plus HTML/JSON/CSV companions), dataset, and model (current/latest text plus CSV/JSON/JSONL companions), plus one open-this-first artifact per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected generated artifacts for scan, portfolio, dataset, and model, grouped into human-readable vs machine-readable outputs, plus one open-this-first artifact per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -99,14 +109,19 @@ show-output-paths:
 		done; \
 	}; \
 	print_paths "scan open this first artifact:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan main generated artifacts:" $(SCAN_OUTPUT_PATHS); \
-	print_paths "scan focus-only shortlist artifacts:" $(SCAN_FOCUS_SHORTLIST_OUTPUT_PATHS); \
+	print_paths "scan human-readable artifacts:" $(SCAN_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan machine-readable companions:" $(SCAN_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan focus-only shortlist human-readable artifacts:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan focus-only shortlist machine-readable companions:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
 	print_paths "portfolio open this first artifact:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio all generated artifacts:" $(PORTFOLIO_OUTPUT_PATHS); \
+	print_paths "portfolio human-readable artifacts:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
+	print_paths "portfolio machine-readable companions:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
 	print_paths "dataset open this first artifact:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset all generated artifacts:" $(DATASET_OUTPUT_PATHS); \
+	print_paths "dataset human-readable artifacts:" $(DATASET_HUMAN_OUTPUT_PATHS); \
+	print_paths "dataset machine-readable companions:" $(DATASET_MACHINE_OUTPUT_PATHS); \
 	print_paths "model open this first artifact:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "model all generated current/latest artifacts:" $(MODEL_LATEST_OUTPUT_PATHS); \
+	print_paths "model current/latest human-readable artifacts:" $(MODEL_HUMAN_OUTPUT_PATHS); \
+	print_paths "model current/latest machine-readable companions:" $(MODEL_MACHINE_OUTPUT_PATHS); \
 	print_paths "model generated history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
