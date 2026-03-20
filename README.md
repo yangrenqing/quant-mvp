@@ -109,12 +109,12 @@ Start-here pairs:
 
 Before the detailed per-workflow sections, the helper shows grouped `latest`, `machine`, `summaries`, `structured`, and `archive` blocks split into quick monitoring vs deeper review.
 
-Per-workflow line order: `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
+Per-workflow line order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
 Workflow labels:
 - `open this first` → live monitoring or immediate post-run check
-- `machine` → closest structured companion
-- `summaries` / `structured files` → deeper review or automation
+- `machine` → closest machine-readable companion
+- `summaries` / `structured` → deeper review or automation
 - archive lines → prior-run inspection
 
 Latest and archive `open this first` entries are chosen independently, so format differences are expected:
