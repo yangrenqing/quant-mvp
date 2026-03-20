@@ -82,12 +82,15 @@ make portfolio
 make dataset
 make model
 make validate-config
+make export-runtime-config
 make quick-check
 make verify
 make daily
 ```
 
 `make validate-config` runs only layered runtime config validation.
+
+`make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits.
 
 `make quick-check` is the fast local preflight: it runs shell syntax checks, Python bytecode compilation, and then `make validate-config`.
 

@@ -8,7 +8,7 @@ TOP ?= 10
 
 export GOCACHE PYTHONPYCACHEPREFIX
 
-.PHONY: help scan portfolio dataset model validate-config quick-check daily verify
+.PHONY: help scan portfolio dataset model validate-config export-runtime-config quick-check daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
@@ -16,6 +16,7 @@ help:
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
 	@echo "make validate-config # only validate layered runtime config"
+	@echo "make export-runtime-config # write reports/runtime_config.json and exit"
 	@echo "make quick-check # fast local checks: shell syntax, py_compile, and validate-config"
 	@echo "make daily      # run the full daily workflow"
 	@echo "make verify     # broader local preflight: Go tests plus make quick-check"
@@ -37,6 +38,11 @@ validate-config:
 	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
 	@PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
 	@echo "config validation: ok"
+
+export-runtime-config:
+	@echo "==> export-runtime-config (GOCACHE=$(GOCACHE))"
+	@PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --export-runtime-config >/dev/null
+	@echo "runtime config snapshot: reports/runtime_config.json"
 
 quick-check:
 	@echo "==> quick-check: shell syntax"
