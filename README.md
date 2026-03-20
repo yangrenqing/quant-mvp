@@ -109,7 +109,11 @@ Use the workflow-specific sections like this:
 - `summaries` / `structured files` → deeper follow-up or automation inputs
 - archive/history lines → prior-run inspection
 
-The latest and archive `open this first` entries are chosen independently, so different formats are intentional. Latest usually favors HTML; archive may favor HTML, CSV, or text depending on the workflow. For scan, portfolio, and dataset, the archive start-here path is paired with its closest machine-readable companion. For model, the latest human-readable entry is a text summary, its closest machine-readable companion is the predictions CSV rather than JSON, and history lives under `reports/model_versions/`.
+The latest and archive `open this first` entries are chosen independently, so format differences are expected:
+- latest usually favors HTML
+- archive may use HTML, CSV, or text by workflow
+- scan, portfolio, and dataset archive start-here paths are paired with the closest machine-readable companion
+- model uses a text summary for the latest human-readable entry, pairs it with `reports/model_predictions.csv` instead of JSON, and keeps history under `reports/model_versions/`
 
 `make validate-config` runs only layered runtime config validation.
 
