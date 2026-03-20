@@ -3,9 +3,7 @@ package store
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 func EnsureSQLiteDB(path string) error {
@@ -13,46 +11,6 @@ func EnsureSQLiteDB(path string) error {
 		return err
 	}
 	return Exec(path, schemaSQL)
-}
-
-func Exec(path string, query string, args ...any) error {
-	cmd := exec.Command("sqlite3", "-bail", path, query)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return wrapError(err, output)
-	}
-	return nil
-}
-
-func QueryString(path string, query string, args ...any) (string, error) {
-	cmd := exec.Command("sqlite3", "-bail", "-noheader", path, query)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", wrapError(err, output)
-	}
-	return strings.TrimRight(string(output), "\n"), nil
-}
-
-func ExecTx(path string, statements ...string) error {
-	filtered := make([]string, 0, len(statements))
-	for _, statement := range statements {
-		if strings.TrimSpace(statement) != "" {
-			filtered = append(filtered, statement)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	script := "BEGIN IMMEDIATE;\n" + strings.Join(filtered, "\n") + "\nCOMMIT;"
-	return Exec(path, script)
-}
-
-func wrapError(err error, output []byte) error {
-	message := strings.TrimSpace(string(output))
-	if message == "" {
-		return err
-	}
-	return fmt.Errorf("%w: %s", err, message)
 }
 
 const schemaSQL = `
@@ -232,3 +190,10 @@ CREATE TABLE IF NOT EXISTS paper_daily_metrics (
     recorded_at TEXT NOT NULL,
     note TEXT NOT NULL
 );`
+
+func wrapError(err error, message string) error {
+	if message == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, message)
+}
