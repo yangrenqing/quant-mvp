@@ -102,7 +102,7 @@ The broad overview area splits into quick monitoring (`reports/dashboard.html`, 
 
 Before the detailed per-workflow sections, the helper shows grouped quick-monitoring versus deeper-review blocks for `latest`, `machine`, `summaries`, `structured`, and `archive` views.
 
-Inside each per-workflow section, the shared order is `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present.
+Inside each per-workflow section, the shared order is `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
 Use the workflow-specific sections like this:
 - `open this first` → live monitoring or immediate post-run check
