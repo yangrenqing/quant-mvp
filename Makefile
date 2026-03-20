@@ -172,10 +172,10 @@ show-output-paths:
 	echo "note: overview starts with the high-level pair, then explicit start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before grouped broad-overview blocks. Shared pairing semantics: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
 	echo "note: workflow blocks split quick monitoring (scan/portfolio) from deeper review (dataset/model); shared per-workflow line order is open this first → machine-readable companion → summary views → structured data/model files → archive → archive open this first → archive machine-readable companion; model is the exception: latest human-readable entry is text, closest machine-readable companion is predictions CSV, not JSON."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
-	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
-	print_paths "broad overview start here after the close (retrospective analysis, HTML + JSON):" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
-	print_paths "broad overview start here for research wrap-up (HTML + JSON):" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
+	print_paths "broad overview start here: trading day (HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
+	print_paths "broad overview start here: market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
+	print_paths "broad overview start here: after close (HTML + JSON):" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
+	print_paths "broad overview start here: research wrap-up (HTML + JSON):" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
 	print_paths "broad overview quick operational monitoring pages (HTML):" $(REPORT_OVERVIEW_MONITORING_PATHS); \
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
