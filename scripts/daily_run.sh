@@ -108,6 +108,7 @@ echo "[10/10] refresh evolution report"
 if [[ "$SKIP_EVOLUTION" != "1" ]]; then
   "$PYTHON_BIN" scripts/evolution_report.py --hours 24
   "$PYTHON_BIN" scripts/evolution_report.py --preset overnight
+  "$PYTHON_BIN" scripts/runtime_report.py
 else
   echo "skip-evolution enabled"
 fi

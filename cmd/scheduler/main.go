@@ -3937,6 +3937,7 @@ func writeDashboardReports() error {
 		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
 		{title: "Evolution Report", path: filepath.Join(reportsDir, "evolution_report.txt")},
 		{title: "Overnight Evolution", path: filepath.Join(reportsDir, "evolution_report_overnight.txt")},
+		{title: "Runtime Report", path: filepath.Join(reportsDir, "runtime_report.txt")},
 		{title: "Health Monitor", path: filepath.Join(reportsDir, "health_monitor.txt")},
 		{title: "Factor Research", path: filepath.Join(reportsDir, "factor_research.txt")},
 		{title: "Promotion Decision", path: filepath.Join(reportsDir, "strategy_promotion_latest.txt")},
@@ -3972,6 +3973,7 @@ func writeDashboardReports() error {
 	researchCard := buildResearchSummaryCard()
 	modelCard := buildModelComparisonCard()
 	strategyQualityCard := buildStrategyQualitySummaryCard()
+	runtimeCard := buildRuntimeSummaryCard()
 	evolutionSummaryCard := buildEvolutionSummaryCard()
 	overnightEvolutionCard := buildOvernightEvolutionSummaryCard()
 
@@ -3987,6 +3989,7 @@ func writeDashboardReports() error {
 	textBuilder.WriteString("Research Summary\n" + researchCard + "\n\n")
 	textBuilder.WriteString("Model Comparison\n" + modelCard + "\n\n")
 	textBuilder.WriteString("Strategy Quality\n" + strategyQualityCard + "\n\n")
+	textBuilder.WriteString("Runtime Summary\n" + runtimeCard + "\n\n")
 	textBuilder.WriteString("Evolution Summary\n" + evolutionSummaryCard + "\n\n")
 	textBuilder.WriteString("Overnight Evolution\n" + overnightEvolutionCard + "\n\n")
 	textBuilder.WriteString("System Health\n" + healthCard + "\n\n")
@@ -4014,6 +4017,7 @@ func writeDashboardReports() error {
 		{Title: "Research Summary", Body: researchCard},
 		{Title: "Model Comparison", Body: modelCard},
 		{Title: "Strategy Quality", Body: strategyQualityCard},
+		{Title: "Runtime Summary", Body: runtimeCard},
 		{Title: "Evolution Summary", Body: evolutionSummaryCard},
 		{Title: "Overnight Evolution", Body: overnightEvolutionCard},
 		{Title: "System Health", Body: healthCard},
@@ -4084,6 +4088,7 @@ func writeDashboardReports() error {
 		"research_summary":    researchCard,
 		"model_comparison":    modelCard,
 		"strategy_quality":    strategyQualityCard,
+		"runtime_summary":     runtimeCard,
 		"evolution_summary":   evolutionSummaryCard,
 		"overnight_evolution": overnightEvolutionCard,
 		"system_health":       healthCard,
@@ -4743,6 +4748,23 @@ func buildStrategyQualitySummaryCard() string {
 	}
 	if len(parts) == 0 {
 		return "策略质量报告尚未生成。"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func buildRuntimeSummaryCard() string {
+	report, _ := readDashboardSection(filepath.Join(reportsDir, "runtime_report.txt"))
+	runtimeLine := firstMatchingLine(report, []string{"Runtime:", "Total runs:"})
+	startLine := firstMatchingLine(report, []string{"Started at:", "Latest run at:"})
+	last24Line := firstMatchingLine(report, []string{"Last 24h runs:"})
+	parts := make([]string, 0, 3)
+	for _, item := range []string{startLine, runtimeLine, last24Line} {
+		if item != "" {
+			parts = append(parts, item)
+		}
+	}
+	if len(parts) == 0 {
+		return "运行时长报告尚未生成。"
 	}
 	return strings.Join(parts, " | ")
 }
