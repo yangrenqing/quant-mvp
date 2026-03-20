@@ -91,13 +91,13 @@ make daily
 
 `make validate-config` runs only layered runtime config validation.
 
-`make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits. `make show-check-paths` prints the same output path used by that export, along with the layered config load order, which layered config files from that order are currently present versus absent on disk, and the optional final override file (`configs/local.yaml` when present).
+`make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits. `make show-check-paths` prints the same output path used by that export, along with the layered config inputs, the layered config load order, which layered config files from that order are currently present versus absent on disk, and the optional final override file (`configs/local.yaml` when present).
 
-`make show-check-paths` prints the resolved Go cache path, Python bytecode cache path, the layered config load order used to build runtime config, separate lists showing which files from that load order are currently present versus absent on disk, the optional final override file applied last when `configs/local.yaml` exists, the shell scripts syntax-checked by `make quick-check`, and the runtime config snapshot path refreshed by `make export-runtime-config`. Use it when troubleshooting `make validate-config`, `make quick-check`, or `make export-runtime-config`, especially when you need to distinguish configured load order from files currently found.
+`make show-check-paths` prints the resolved Go cache path, Python bytecode cache path, the layered config inputs and load order used to build runtime config, separate lists showing which files from that load order are currently present versus absent on disk, the optional final override file applied last when `configs/local.yaml` exists, the shell scripts syntax-checked by `make quick-check`, the runtime config snapshot path refreshed by `make export-runtime-config`, and the most useful follow-up artifact/output to inspect after `make validate-config`, `make export-runtime-config`, `make quick-check`, and `make verify`. Use it when troubleshooting these check-oriented targets, especially when you need to distinguish configured load order from files currently found and quickly see where to look next after a check runs.
 
-`make quick-check` is the fast local preflight: it runs shell syntax checks for the scripts listed by `make show-check-paths`, Python bytecode compilation, and then `make validate-config`.
+`make quick-check` is the fast local preflight: it runs shell syntax checks for the scripts listed by `make show-check-paths`, Python bytecode compilation, and then `make validate-config`. `make show-check-paths` also points you at the follow-up console output to inspect after `make quick-check`.
 
-`make verify` is the broader local preflight: it runs Go tests and then `make quick-check`.
+`make verify` is the broader local preflight: it runs Go tests and then `make quick-check`. `make show-check-paths` also points you at the follow-up console output to inspect after `make verify`.
 
 Go-based `make` targets default `GOCACHE` to the repo-local `.cache/go-build`, and Python bytecode checks default `PYTHONPYCACHEPREFIX` to the repo-local `.cache/python`. Override either variable explicitly if you want a different cache path.
 
