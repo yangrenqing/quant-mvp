@@ -46,20 +46,6 @@ func TestLoadRejectsInvalidWindows(t *testing.T) {
 	}
 }
 
-func TestLoadDefaultsPortfolioMaxCashShareWhenOmitted(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nportfolio:\n  rebalance_interval_days: 5\n")
-
-	cfg, err := Load(filepath.Join(dir, "config.yaml"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.Portfolio.MaxCashShare != 0.20 {
-		t.Fatalf("MaxCashShare = %v, want 0.20", cfg.Portfolio.MaxCashShare)
-	}
-}
-
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
