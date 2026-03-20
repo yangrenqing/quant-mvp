@@ -7,10 +7,15 @@ RUNTIME_CONFIG_SNAPSHOT ?= $(CURDIR)/reports/runtime_config.json
 REPORTS_DIR ?= $(CURDIR)/reports
 REPORT_HISTORY_DIR ?= $(REPORTS_DIR)/history
 REPORT_DASHBOARD_OVERVIEW_PATH ?= $(REPORTS_DIR)/dashboard.html
+REPORT_DASHBOARD_OVERVIEW_JSON ?= $(REPORTS_DIR)/dashboard.json
 REPORT_MARKET_OVERVIEW_PATH ?= $(REPORTS_DIR)/market_overview.html
+REPORT_MARKET_OVERVIEW_JSON ?= $(REPORTS_DIR)/market_overview.json
 REPORT_HISTORY_OVERVIEW_PATH ?= $(REPORTS_DIR)/history_compare.html
+REPORT_HISTORY_OVERVIEW_JSON ?= $(REPORTS_DIR)/history_compare.json
 REPORT_RESEARCH_SUMMARY_PATH ?= $(REPORTS_DIR)/research_summary.html
+REPORT_RESEARCH_SUMMARY_JSON ?= $(REPORTS_DIR)/research_summary.json
 REPORT_OVERVIEW_ENTRY_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_HISTORY_OVERVIEW_PATH) $(REPORT_RESEARCH_SUMMARY_PATH)
+REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON) $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
@@ -99,7 +104,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected current output paths, broad overview entry points for high-level snapshots, per-run history/archive inspection locations plus a best file to open first inside each archive, and workflow-specific latest outputs for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
+	@echo "make show-output-paths # print expected current output paths, broad overview entry points and JSON companions for high-level snapshots, per-run history/archive inspection locations plus a best file to open first inside each archive, and workflow-specific latest outputs for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -135,6 +140,7 @@ show-output-paths:
 	}; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
 	print_paths "broad overview entry points for a high-level snapshot:" $(REPORT_OVERVIEW_ENTRY_PATHS); \
+	print_paths "broad overview machine-readable companions:" $(REPORT_OVERVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first path:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
