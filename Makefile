@@ -30,6 +30,7 @@ REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
 OVERVIEW_ENTRY_USE_NOTE ?= use $(REPORT_DASHBOARD_OVERVIEW_PATH) and $(REPORT_MARKET_OVERVIEW_PATH) for quick operational monitoring, and $(REPORT_HISTORY_OVERVIEW_PATH) and $(REPORT_RESEARCH_SUMMARY_PATH) for deeper narrative/review; trading day: $(REPORT_OVERVIEW_LIVE_STATUS_PATH) plus $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); market context: $(REPORT_MARKET_OVERVIEW_PATH) plus $(REPORT_MARKET_OVERVIEW_JSON); after the close: $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) plus $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); research wrap-up: $(REPORT_RESEARCH_SUMMARY_PATH) plus $(REPORT_RESEARCH_SUMMARY_JSON); use a workflow-specific open-this-first path when you are actively monitoring one workflow or checking it immediately after that workflow completes.
 OVERVIEW_GROUP_PAIRING_NOTE ?= grouped overview HTML is for quick human scanning; grouped JSON is for automation/downstream tooling; JSON stays in HTML order for line-for-line pairing.
+WORKFLOW_GROUP_PAIRING_NOTE ?= grouped workflow blocks are ordered latest output → machine-readable companion → summary views → structured data/model files → archive/history → archive/history machine-readable companion.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
@@ -172,6 +173,7 @@ show-output-paths:
 	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
 	echo "note: the workflow-specific area starts with compact grouped latest-output, machine-readable companion, summary/structured follow-up, and archive/history views; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; in each workflow-specific section, start with 'open this first'; the next line gives the closest machine-readable companion; use the grouped or per-workflow summary views and structured data/model files lists for deeper follow-up or automation, and use the history/archive paths for archived runs."; \
+	echo "note: $(WORKFLOW_GROUP_PAIRING_NOTE)"; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
@@ -182,18 +184,18 @@ show-output-paths:
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
 	print_paths "broad overview deeper narrative/review JSON companions:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow latest outputs for quick operational monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
-	print_paths "workflow latest machine-readable companions for quick operational monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
-	print_paths "workflow latest outputs for deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
-	print_paths "workflow latest machine-readable companions for deeper review:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow summary views for quick operational monitoring:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
-	print_paths "workflow summary views for deeper review:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
-	print_paths "workflow structured data/model files for quick operational monitoring:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
-	print_paths "workflow structured data/model files for deeper review:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
-	print_paths "workflow archive/history follow-up for quick operational monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
-	print_paths "workflow archive/history machine-readable companions for quick operational monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
-	print_paths "workflow archive/history follow-up for deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
-	print_paths "workflow archive/history machine-readable companions for deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
+	print_paths "workflow quick operational monitoring latest outputs:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "workflow quick operational monitoring machine-readable companions:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
+	print_paths "workflow deeper review latest outputs:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "workflow deeper review machine-readable companions:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
+	print_paths "workflow quick operational monitoring summary views:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
+	print_paths "workflow deeper review summary views:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
+	print_paths "workflow quick operational monitoring structured data/model files:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
+	print_paths "workflow deeper review structured data/model files:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
+	print_paths "workflow quick operational monitoring archive/history follow-up:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
+	print_paths "workflow quick operational monitoring archive/history machine-readable companions:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
+	print_paths "workflow deeper review archive/history follow-up:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
+	print_paths "workflow deeper review archive/history machine-readable companions:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first for quick monitoring/post-run checks:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan latest machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
