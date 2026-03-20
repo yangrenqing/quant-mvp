@@ -61,12 +61,12 @@ func TestLoadDefaultsPortfolioMaxCashShareWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestLoadLocalOverridesEarlierLayers(t *testing.T) {
+func TestLoadLocalOverridesEarlierLayersAndPreservesMergedFields(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nstrategy:\n  short_window: 3\n  long_window: 5\n")
-	writeFile(t, filepath.Join(dir, "data.yaml"), "db:\n  path: data/from-data.db\n")
-	writeFile(t, filepath.Join(dir, "portfolio.yaml"), "portfolio:\n  max_cash_share: 0.35\n")
-	writeFile(t, filepath.Join(dir, "report.yaml"), "report:\n  history_root: reports/from-report\n")
+	writeFile(t, filepath.Join(dir, "data.yaml"), "db:\n  path: data/from-data.db\nstrategy:\n  symbol: 600519\n")
+	writeFile(t, filepath.Join(dir, "portfolio.yaml"), "portfolio:\n  rebalance_interval_days: 7\n  max_cash_share: 0.35\n")
+	writeFile(t, filepath.Join(dir, "report.yaml"), "report:\n  history_root: reports/from-report\n  cleanup_keep_days: 21\n")
 	writeFile(t, filepath.Join(dir, "local.yaml"), "db:\n  path: data/from-local.db\nportfolio:\n  max_cash_share: 0.10\nreport:\n  history_root: reports/from-local\n")
 
 	cfg, err := Load(filepath.Join(dir, "config.yaml"))
@@ -80,12 +80,24 @@ func TestLoadLocalOverridesEarlierLayers(t *testing.T) {
 	if cfg.Portfolio.MaxCashShare != 0.10 {
 		t.Fatalf("MaxCashShare = %v, want local override", cfg.Portfolio.MaxCashShare)
 	}
+	if cfg.Portfolio.RebalanceIntervalDays != 7 {
+		t.Fatalf("RebalanceIntervalDays = %d, want preserved layered value", cfg.Portfolio.RebalanceIntervalDays)
+	}
 	if cfg.Report.HistoryRoot != "reports/from-local" {
 		t.Fatalf("HistoryRoot = %q, want local override", cfg.Report.HistoryRoot)
 	}
+	if cfg.Report.CleanupKeepDays != 21 {
+		t.Fatalf("CleanupKeepDays = %d, want preserved layered value", cfg.Report.CleanupKeepDays)
+	}
+	if cfg.Strategy.Symbol != "600519" {
+		t.Fatalf("Symbol = %q, want preserved layered value", cfg.Strategy.Symbol)
+	}
+	if cfg.Strategy.ShortWindow != 3 || cfg.Strategy.LongWindow != 5 {
+		t.Fatalf("unexpected strategy windows: %+v", cfg.Strategy)
+	}
 }
 
-func TestWriteRuntimeSnapshotCreatesParentsAndFormatsJSON(t *testing.T) {
+func TestWriteRuntimeSnapshotCreatesParentsAndWritesNewlineTerminatedPrettyJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "runtime", "snapshot.json")
 	cfg := Config{
@@ -109,6 +121,9 @@ func TestWriteRuntimeSnapshotCreatesParentsAndFormatsJSON(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read snapshot: %v", err)
+	}
+	if len(got) == 0 || got[len(got)-1] != '\n' {
+		t.Fatalf("snapshot missing trailing newline: %q", got)
 	}
 
 	want, err := json.MarshalIndent(cfg, "", "  ")
