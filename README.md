@@ -101,7 +101,7 @@ Overview labels:
 - `overview pages` → quick human scan
 - `overview JSON` → automation view in the same order
 
-Start here:
+Start-here pairs:
 - trading day → `reports/dashboard.html` + `reports/dashboard.json`
 - market context → `reports/market_overview.html` + `reports/market_overview.json`
 - after the close → `reports/history_compare.html` + `reports/history_compare.json`
@@ -111,7 +111,7 @@ Before the detailed per-workflow sections, the helper shows grouped `latest`, `m
 
 Per-workflow line order: `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
-Workflow legend:
+Workflow labels:
 - `open this first` → live monitoring or immediate post-run check
 - `machine` → closest structured companion
 - `summaries` / `structured files` → deeper review or automation
