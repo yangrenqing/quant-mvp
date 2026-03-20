@@ -102,7 +102,7 @@ The broad overview area is split into quick monitoring (`reports/dashboard.html`
 
 The workflow-specific area begins with compact grouped quick-monitoring versus deeper-review blocks for `latest`, `machine-readable`, `summaries`, `structured`, and `archive` views before the detailed per-workflow sections.
 
-Within each per-workflow section, the helper uses one shared order: `open this first`, `machine-readable`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine-readable` when present. The one notable model-specific quirk is that its latest human-readable entry is a text summary, while its closest machine-readable companion is the predictions CSV rather than JSON.
+Within each per-workflow section, the helper uses one shared order: `open this first`, `machine-readable`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present. The one notable model-specific quirk is that its latest human-readable entry is a text summary, while its closest machine-readable companion is the predictions CSV rather than JSON.
 
 Use the workflow-specific `open this first` path when you are actively monitoring one workflow or checking it immediately after completion. Use the `summaries` plus `structured files` lists for deeper follow-up or automation inputs. Use the archive/history lines when you need a prior run.
 
