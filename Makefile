@@ -196,24 +196,24 @@ show-output-paths:
 	print_paths "scan machine-readable:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summaries:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
-	print_paths "scan focus shortlist summaries:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
-	print_paths "scan focus shortlist structured files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan focus summaries:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan focus structured:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan archive:" $(SCAN_HISTORY_OUTPUT_PATHS); \
-	print_paths "scan archive start here:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan archive start:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan archive machine-readable:" $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "portfolio open this first:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "portfolio machine-readable:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "portfolio summaries:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
 	print_paths "portfolio structured files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
 	print_paths "portfolio archive:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
-	print_paths "portfolio archive start here:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio archive start:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "portfolio archive machine-readable:" $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "dataset open this first:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "dataset machine-readable:" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "dataset summaries:" $(DATASET_HUMAN_OUTPUT_PATHS); \
 	print_paths "dataset structured files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
 	print_paths "dataset archive:" $(DATASET_HISTORY_OUTPUT_PATHS); \
-	print_paths "dataset archive start here:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset archive start:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "dataset archive machine-readable:" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "model open this first:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "model machine-readable:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
