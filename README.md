@@ -100,9 +100,9 @@ The broad overview area is split into quick monitoring (`reports/dashboard.html`
 - after the close → `reports/history_compare.html` + `reports/history_compare.json`
 - research wrap-up → `reports/research_summary.html` + `reports/research_summary.json`
 
-The workflow-specific area begins with compact grouped quick-monitoring versus deeper-review blocks for `latest`, `machine-readable`, `summaries`, `structured`, and `archive` views before the detailed per-workflow sections.
+The workflow-specific area begins with compact grouped quick-monitoring versus deeper-review blocks for `latest`, `machine`, `summaries`, `structured`, and `archive` views before the detailed per-workflow sections.
 
-Within each per-workflow section, the helper uses one shared order: `open this first`, `machine-readable`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present.
+Within each per-workflow section, the helper uses one shared order: `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present.
 
 Use the workflow-specific `open this first` path when you are actively monitoring one workflow or checking it immediately after completion. Use the `summaries` plus `structured files` lists for deeper follow-up or automation inputs. Use the archive/history lines when you need a prior run.
 
