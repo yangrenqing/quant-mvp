@@ -28,8 +28,8 @@ REPORT_OVERVIEW_ENTRY_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET
 REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON) $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
-OVERVIEW_GROUP_PAIRING_NOTE ?= grouped overview HTML is for quick human scanning; grouped JSON is for automation/downstream tooling; JSON stays in HTML order for line-for-line pairing.
-WORKFLOW_GROUP_PAIRING_NOTE ?= grouped workflow order is open this first → machine → summaries → structured → archive → archive start → archive machine.
+OVERVIEW_GROUP_PAIRING_NOTE ?= HTML = quick scan; JSON = automation; order matches line-for-line.
+WORKFLOW_GROUP_PAIRING_NOTE ?= order = open this first → machine → summaries → structured → archive → archive start → archive machine.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
