@@ -74,6 +74,21 @@ func TestLoadRejectsInvalidTypedValueWithFieldName(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsLayeredConfigMissingRequiredDailyRun(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "app:\n  name: quant-mvp-test\nstrategy:\n  short_window: 3\n  long_window: 5\n")
+	writeFile(t, filepath.Join(dir, "data.yaml"), "db:\n  path: data/custom.db\n")
+	writeFile(t, filepath.Join(dir, "report.yaml"), "report:\n  history_root: reports/from-report\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil {
+		t.Fatal("expected missing required schedule.daily_run error")
+	}
+	if !strings.Contains(err.Error(), "schedule.daily_run") {
+		t.Fatalf("Load() error = %v, want missing required field name", err)
+	}
+}
+
 func TestLoadRejectsUnknownSection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nunknown_section:\n  enabled: true\n")
