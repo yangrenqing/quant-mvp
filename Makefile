@@ -30,9 +30,10 @@ SCAN_FOCUS_SHORTLIST_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_TEXT) $(SCAN_FOCUS_S
 PORTFOLIO_REPORT_TEXT ?= $(CURDIR)/reports/portfolio_backtest.txt
 PORTFOLIO_REPORT_HTML ?= $(CURDIR)/reports/portfolio_backtest.html
 PORTFOLIO_REPORT_JSON ?= $(CURDIR)/reports/portfolio_backtest.json
+PORTFOLIO_REPORT_CSV ?= $(CURDIR)/reports/portfolio_backtest.csv
 PORTFOLIO_RECOMMENDED_OUTPUT_PATH ?= $(PORTFOLIO_REPORT_HTML)
 PORTFOLIO_PRIMARY_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT)
-PORTFOLIO_COMPANION_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_HTML) $(PORTFOLIO_REPORT_JSON)
+PORTFOLIO_COMPANION_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_HTML) $(PORTFOLIO_REPORT_JSON) $(PORTFOLIO_REPORT_CSV)
 PORTFOLIO_OUTPUT_PATHS ?= $(PORTFOLIO_PRIMARY_OUTPUT_PATHS) $(PORTFOLIO_COMPANION_OUTPUT_PATHS)
 DATASET_EXPORT_CSV ?= $(CURDIR)/reports/training_dataset.csv
 DATASET_EXPORT_TEXT ?= $(CURDIR)/reports/training_dataset.txt
@@ -65,7 +66,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected generated artifacts for scan (main report plus focus-only shortlist), portfolio, dataset, and model, plus one open-this-first artifact per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected generated artifacts for scan (main report plus focus-only shortlist), portfolio (text plus HTML/JSON/CSV companions), dataset, and model, plus one open-this-first artifact per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
