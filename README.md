@@ -111,6 +111,7 @@ Inside each per-workflow section, the shared order is `open this first`, `machin
 
 Use the workflow-specific sections like this:
 - `open this first` → live monitoring or immediate post-run check
+- `machine` → closest structured companion
 - `summaries` / `structured files` → deeper review or automation
 - archive/history lines → prior-run inspection
 
