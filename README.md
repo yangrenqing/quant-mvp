@@ -82,8 +82,15 @@ make portfolio
 make dataset
 make model
 make validate-config
+make verify
 make daily
 ```
+
+`make validate-config` runs only layered runtime config validation.
+
+`make verify` is the broader local preflight: it runs Go tests, shell syntax checks, Python bytecode compilation, and then `make validate-config`.
+
+Go-based `make` targets default `GOCACHE` to the repo-local `.cache/go-build`. Override `GOCACHE` explicitly if you want a different cache path.
 
 Model workflow:
 ```bash

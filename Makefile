@@ -14,9 +14,10 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make validate-config # validate layered runtime config"
+	@echo "make validate-config # only validate layered runtime config"
 	@echo "make daily      # run the full daily workflow"
-	@echo "make verify     # run Go tests, script smoke checks, and config validation"
+	@echo "make verify     # broader local preflight: Go tests, script smoke checks, py_compile, and validate-config"
+	@echo "Go-based make targets use GOCACHE=$(GOCACHE) unless GOCACHE is overridden"
 
 scan:
 	PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --scan-a-share --top $(TOP)
