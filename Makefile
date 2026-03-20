@@ -170,15 +170,13 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
-	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
-	echo "note: current/latest and history/archive 'open this first' recommendations are independent and may differ by format; grouped workflow views split quick monitoring (scan/portfolio) from deeper review (dataset/model); below, the shared per-workflow line order is open this first → machine-readable companion → summary views → structured data/model files → archive → archive open this first → archive machine-readable companion."; \
-	echo "note: model is the one grouped latest-output exception where the human-readable latest entry is a text summary while the closest machine-readable companion is a predictions CSV rather than JSON."; \
+	echo "note: overview starts with the high-level pair, then explicit start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before grouped broad-overview blocks; $(OVERVIEW_ENTRY_USE_NOTE) Shared pairing semantics: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
+	echo "note: workflow latest/archive recommendations may differ by format; grouped workflow views split quick monitoring (scan/portfolio) from deeper review (dataset/model); the shared per-workflow line order is open this first → machine-readable companion → summary views → structured data/model files → archive → archive open this first → archive machine-readable companion; model is the one grouped latest-output exception where the human-readable latest entry is a text summary while the closest machine-readable companion is a predictions CSV rather than JSON."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
 	print_paths "broad overview start here after the close (retrospective analysis, HTML + JSON):" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
 	print_paths "broad overview start here for research wrap-up (HTML + JSON):" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
-	echo "note: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
 	print_paths "broad overview quick operational monitoring pages (HTML):" $(REPORT_OVERVIEW_MONITORING_PATHS); \
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
