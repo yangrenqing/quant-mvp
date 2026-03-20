@@ -92,7 +92,7 @@ make daily
 
 `make help` now keeps the `make show-output-paths` summary intentionally short; run `make show-output-paths` itself for the detailed operator guidance.
 
-`make show-output-paths` prints the current generated report/artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
+`make show-output-paths` prints the current report/artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
 
 The broad overview area splits into quick monitoring (`reports/dashboard.html`, `reports/market_overview.html`) and deeper review (`reports/history_compare.html`, `reports/research_summary.html`).
 
@@ -115,7 +115,7 @@ Workflow legend:
 - `open this first` → live monitoring or immediate post-run check
 - `machine` → closest structured companion
 - `summaries` / `structured files` → deeper review or automation
-- archive/history lines → prior-run inspection
+- archive lines → prior-run inspection
 
 Latest and archive `open this first` entries are chosen independently, so format differences are expected:
 - latest usually favors HTML
