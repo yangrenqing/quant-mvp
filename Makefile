@@ -28,7 +28,6 @@ REPORT_OVERVIEW_ENTRY_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_PATH) $(REPORT_MARKET
 REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARKET_OVERVIEW_JSON) $(REPORT_HISTORY_OVERVIEW_JSON) $(REPORT_RESEARCH_SUMMARY_JSON)
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
-OVERVIEW_ENTRY_USE_NOTE ?= use $(REPORT_DASHBOARD_OVERVIEW_PATH) and $(REPORT_MARKET_OVERVIEW_PATH) for quick operational monitoring, and $(REPORT_HISTORY_OVERVIEW_PATH) and $(REPORT_RESEARCH_SUMMARY_PATH) for deeper narrative/review; trading day: $(REPORT_OVERVIEW_LIVE_STATUS_PATH) plus $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); market context: $(REPORT_MARKET_OVERVIEW_PATH) plus $(REPORT_MARKET_OVERVIEW_JSON); after the close: $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) plus $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); research wrap-up: $(REPORT_RESEARCH_SUMMARY_PATH) plus $(REPORT_RESEARCH_SUMMARY_JSON); use a workflow-specific open-this-first path when you are actively monitoring one workflow or checking it immediately after that workflow completes.
 OVERVIEW_GROUP_PAIRING_NOTE ?= grouped overview HTML is for quick human scanning; grouped JSON is for automation/downstream tooling; JSON stays in HTML order for line-for-line pairing.
 WORKFLOW_GROUP_PAIRING_NOTE ?= grouped workflow blocks are ordered latest output → machine-readable companion → summary views → structured data/model files → archive/history → archive/history machine-readable companion.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
@@ -170,7 +169,7 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
-	echo "note: overview starts with the high-level pair, then explicit start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before grouped broad-overview blocks; $(OVERVIEW_ENTRY_USE_NOTE) Shared pairing semantics: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
+	echo "note: overview starts with the high-level pair, then explicit start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before grouped broad-overview blocks. Shared pairing semantics: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
 	echo "note: workflow latest/archive recommendations may differ by format; grouped workflow views split quick monitoring (scan/portfolio) from deeper review (dataset/model); the shared per-workflow line order is open this first → machine-readable companion → summary views → structured data/model files → archive → archive open this first → archive machine-readable companion; model is the one grouped latest-output exception where the human-readable latest entry is a text summary while the closest machine-readable companion is a predictions CSV rather than JSON."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
