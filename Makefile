@@ -42,7 +42,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print follow-up report/artifact paths for scan, portfolio, dataset, and model"
+	@echo "make show-output-paths # print expected follow-up report/artifact paths for scan, portfolio, dataset, and model plus whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -64,10 +64,19 @@ model:
 	$(PYTHON) scripts/model_pipeline.py --from $(FROM) --to $(TO) --label label_10d
 
 show-output-paths:
-	@echo "scan follow-up artifacts: $(SCAN_OUTPUT_PATHS)"
-	@echo "portfolio follow-up artifacts: $(PORTFOLIO_OUTPUT_PATHS)"
-	@echo "dataset follow-up artifacts: $(DATASET_OUTPUT_PATHS)"
-	@echo "model follow-up artifacts: $(MODEL_OUTPUT_PATHS)"
+	@for workflow in \
+		"scan|$(SCAN_OUTPUT_PATHS)" \
+		"portfolio|$(PORTFOLIO_OUTPUT_PATHS)" \
+		"dataset|$(DATASET_OUTPUT_PATHS)" \
+		"model|$(MODEL_OUTPUT_PATHS)"; do \
+		name=$${workflow%%|*}; \
+		paths=$${workflow#*|}; \
+		echo "$$name expected follow-up artifacts:"; \
+		for path in $$paths; do \
+			if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
+			printf '  [%s] %s\n' "$$status" "$$path"; \
+		done; \
+	done
 
 validate-config:
 	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
