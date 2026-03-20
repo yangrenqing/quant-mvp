@@ -32,16 +32,22 @@ model:
 	$(PYTHON) scripts/model_pipeline.py --from $(FROM) --to $(TO) --label label_10d
 
 validate-config:
-	PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
+	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
+	@PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
+	@echo "config validation: ok"
 
 daily:
 	bash scripts/daily_run.sh
 
 verify:
-	PATH=/usr/local/go/bin:$$PATH $(GO) test ./...
-	bash -n scripts/daily_run.sh
-	bash -n scripts/weekly_run.sh
-	bash -n scripts/intraday_run.sh
-	bash -n scripts/research_run.sh
-	$(PYTHON) -m py_compile scripts/*.py
-	$(MAKE) validate-config
+	@echo "==> verify: Go tests"
+	@PATH=/usr/local/go/bin:$$PATH $(GO) test ./...
+	@echo "==> verify: shell syntax"
+	@bash -n scripts/daily_run.sh
+	@bash -n scripts/weekly_run.sh
+	@bash -n scripts/intraday_run.sh
+	@bash -n scripts/research_run.sh
+	@echo "==> verify: Python bytecode"
+	@$(PYTHON) -m py_compile scripts/*.py
+	@echo "==> verify: layered runtime config"
+	@$(MAKE) --no-print-directory validate-config
