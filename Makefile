@@ -2,13 +2,14 @@ GO ?= /usr/local/go/bin/go
 GOCACHE ?= $(CURDIR)/.cache/go-build
 PYTHON ?= python3
 PYTHONPYCACHEPREFIX ?= $(CURDIR)/.cache/python
+RUNTIME_CONFIG_SNAPSHOT ?= $(CURDIR)/reports/runtime_config.json
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
 
 export GOCACHE PYTHONPYCACHEPREFIX
 
-.PHONY: help scan portfolio dataset model validate-config export-runtime-config quick-check daily verify
+.PHONY: help scan portfolio dataset model validate-config export-runtime-config show-check-paths quick-check daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
@@ -17,6 +18,7 @@ help:
 	@echo "make model      # run model pipeline"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write reports/runtime_config.json and exit"
+	@echo "make show-check-paths # print cache/snapshot paths for local check troubleshooting"
 	@echo "make quick-check # fast local checks: shell syntax, py_compile, and validate-config"
 	@echo "make daily      # run the full daily workflow"
 	@echo "make verify     # broader local preflight: Go tests plus make quick-check"
@@ -42,7 +44,12 @@ validate-config:
 export-runtime-config:
 	@echo "==> export-runtime-config (GOCACHE=$(GOCACHE))"
 	@PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --export-runtime-config >/dev/null
-	@echo "runtime config snapshot: reports/runtime_config.json"
+	@echo "runtime config snapshot: $(RUNTIME_CONFIG_SNAPSHOT)"
+
+show-check-paths:
+	@echo "go build cache: $(GOCACHE)"
+	@echo "python bytecode cache: $(PYTHONPYCACHEPREFIX)"
+	@echo "runtime config snapshot: $(RUNTIME_CONFIG_SNAPSHOT)"
 
 quick-check:
 	@echo "==> quick-check: shell syntax"

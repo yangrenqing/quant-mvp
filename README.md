@@ -83,6 +83,7 @@ make dataset
 make model
 make validate-config
 make export-runtime-config
+make show-check-paths
 make quick-check
 make verify
 make daily
@@ -92,11 +93,13 @@ make daily
 
 `make export-runtime-config` writes the resolved runtime config snapshot to `reports/runtime_config.json` and exits.
 
+`make show-check-paths` prints the resolved Go cache, Python bytecode cache, and runtime config snapshot paths used by the make-based validation workflow. Use it when troubleshooting `make validate-config`, `make quick-check`, or `make export-runtime-config`.
+
 `make quick-check` is the fast local preflight: it runs shell syntax checks, Python bytecode compilation, and then `make validate-config`.
 
 `make verify` is the broader local preflight: it runs Go tests and then `make quick-check`.
 
-Go-based `make` targets default `GOCACHE` to the repo-local `.cache/go-build`. Override `GOCACHE` explicitly if you want a different cache path.
+Go-based `make` targets default `GOCACHE` to the repo-local `.cache/go-build`, and Python bytecode checks default `PYTHONPYCACHEPREFIX` to the repo-local `.cache/python`. Override either variable explicitly if you want a different cache path.
 
 Model workflow:
 ```bash
