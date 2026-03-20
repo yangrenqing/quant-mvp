@@ -91,6 +91,10 @@ DATASET_HISTORY_OUTPUT_PATHS ?= $(REPORT_HISTORY_DATE_PATTERN)/training_dataset
 DATASET_HISTORY_RECOMMENDED_ENTRY_FILE ?= training_dataset.csv
 DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH ?= $(DATASET_HISTORY_OUTPUT_PATHS)/$(DATASET_HISTORY_RECOMMENDED_ENTRY_FILE)
 DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH ?= $(DATASET_HISTORY_OUTPUT_PATHS)/training_dataset.json
+WORKFLOW_ARCHIVE_MONITORING_PATHS ?= $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH) $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH)
+WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS ?= $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH) $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH)
+WORKFLOW_ARCHIVE_REVIEW_PATHS ?= $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH) $(MODEL_HISTORY_OUTPUT_PATHS)
+WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS ?= $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH)
 MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
 MODEL_TRAIN_REPORT ?= $(CURDIR)/reports/model_train.txt
 MODEL_CLASSIFIER_REPORT ?= $(CURDIR)/reports/benchmark_classifier.txt
@@ -161,7 +165,7 @@ show-output-paths:
 	}; \
 	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
-	echo "note: the workflow-specific area starts with a compact grouped latest-output view; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; in each workflow-specific section, start with 'open this first'; the next line gives the closest machine-readable companion; use the summary views and structured data/model files lists for deeper follow-up or automation, and history/archive paths for archived runs."; \
+	echo "note: the workflow-specific area starts with compact grouped latest-output and archive/history views; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; in each workflow-specific section, start with 'open this first'; the next line gives the closest machine-readable companion; use the summary views and structured data/model files lists for deeper follow-up or automation, and history/archive paths for archived runs."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
@@ -172,8 +176,10 @@ show-output-paths:
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
 	print_paths "broad overview deeper narrative/review JSON companions:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow-specific latest outputs for quick operational monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
-	print_paths "workflow-specific latest outputs for deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "workflow latest outputs for quick operational monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "workflow latest outputs for deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "workflow archive/history follow-up for quick operational monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
+	print_paths "workflow archive/history follow-up for deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
 	print_paths "scan open this first for quick monitoring/post-run checks:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan latest machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
