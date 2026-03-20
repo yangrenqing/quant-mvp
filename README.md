@@ -92,7 +92,7 @@ make daily
 
 `make help` now keeps the `make show-output-paths` summary intentionally short; run `make show-output-paths` itself for the detailed operator guidance.
 
-`make show-output-paths` prints the current generated report/artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the best high-level overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
+`make show-output-paths` prints the current generated report/artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
 
 The broad overview area is split into quick monitoring (`reports/dashboard.html`, `reports/market_overview.html`) versus deeper review (`reports/history_compare.html`, `reports/research_summary.html`). HTML is the quick-scan view, JSON is the automation view, and the two stay in the same order. The explicit broad-overview start-here pairs are:
 - trading day → `reports/dashboard.html` + `reports/dashboard.json`
