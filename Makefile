@@ -18,19 +18,32 @@ QUICK_CHECK_FOLLOW_UP ?= console output from $(QUICK_CHECK_STEPS)
 VERIFY_FOLLOW_UP ?= console output from $(VERIFY_STEPS)
 SCAN_REPORT_TEXT ?= $(CURDIR)/reports/a_share_scan.txt
 SCAN_REPORT_HTML ?= $(CURDIR)/reports/a_share_scan.html
-SCAN_OUTPUT_PATHS ?= $(SCAN_REPORT_TEXT) $(SCAN_REPORT_HTML)
+SCAN_REPORT_JSON ?= $(CURDIR)/reports/a_share_scan.json
+SCAN_PRIMARY_OUTPUT_PATHS ?= $(SCAN_REPORT_TEXT)
+SCAN_COMPANION_OUTPUT_PATHS ?= $(SCAN_REPORT_HTML) $(SCAN_REPORT_JSON)
+SCAN_OUTPUT_PATHS ?= $(SCAN_PRIMARY_OUTPUT_PATHS) $(SCAN_COMPANION_OUTPUT_PATHS)
 PORTFOLIO_REPORT_TEXT ?= $(CURDIR)/reports/portfolio_backtest.txt
 PORTFOLIO_REPORT_HTML ?= $(CURDIR)/reports/portfolio_backtest.html
-PORTFOLIO_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT) $(PORTFOLIO_REPORT_HTML)
+PORTFOLIO_REPORT_JSON ?= $(CURDIR)/reports/portfolio_backtest.json
+PORTFOLIO_PRIMARY_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT)
+PORTFOLIO_COMPANION_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_HTML) $(PORTFOLIO_REPORT_JSON)
+PORTFOLIO_OUTPUT_PATHS ?= $(PORTFOLIO_PRIMARY_OUTPUT_PATHS) $(PORTFOLIO_COMPANION_OUTPUT_PATHS)
 DATASET_EXPORT_CSV ?= $(CURDIR)/reports/training_dataset.csv
 DATASET_EXPORT_TEXT ?= $(CURDIR)/reports/training_dataset.txt
-DATASET_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_TEXT)
+DATASET_EXPORT_JSON ?= $(CURDIR)/reports/training_dataset.json
+DATASET_PRIMARY_OUTPUT_PATHS ?= $(DATASET_EXPORT_TEXT)
+DATASET_COMPANION_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
+DATASET_OUTPUT_PATHS ?= $(DATASET_PRIMARY_OUTPUT_PATHS) $(DATASET_COMPANION_OUTPUT_PATHS)
 MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
 MODEL_PREDICTIONS ?= $(CURDIR)/reports/model_predictions.csv
+MODEL_REGRESSION_JSON ?= $(CURDIR)/reports/linear_model.json
+MODEL_CLASSIFIER_JSON ?= $(CURDIR)/reports/benchmark_classifier.json
 MODEL_VERSIONS_DIR ?= $(CURDIR)/reports/model_versions
-MODEL_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT) $(MODEL_PREDICTIONS) $(MODEL_VERSIONS_DIR)
-MODEL_LATEST_OUTPUT_PATHS ?= $(filter-out $(MODEL_VERSIONS_DIR),$(MODEL_OUTPUT_PATHS))
-MODEL_HISTORY_OUTPUT_PATHS ?= $(filter $(MODEL_VERSIONS_DIR),$(MODEL_OUTPUT_PATHS))
+MODEL_PRIMARY_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
+MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON)
+MODEL_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS) $(MODEL_VERSIONS_DIR)
+MODEL_LATEST_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS)
+MODEL_HISTORY_OUTPUT_PATHS ?= $(MODEL_VERSIONS_DIR)
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
@@ -44,7 +57,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected follow-up report/artifact paths for scan, portfolio, dataset, and model, separating model current/latest outputs from the versioned history directory, plus whether each exists on disk"
+	@echo "make show-output-paths # print expected follow-up report/artifact paths for scan, portfolio, dataset, and model, including key HTML/JSON/CSV companions and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -66,28 +79,23 @@ model:
 	$(PYTHON) scripts/model_pipeline.py --from $(FROM) --to $(TO) --label label_10d
 
 show-output-paths:
-	@for workflow in \
-		"scan|$(SCAN_OUTPUT_PATHS)" \
-		"portfolio|$(PORTFOLIO_OUTPUT_PATHS)" \
-		"dataset|$(DATASET_OUTPUT_PATHS)"; do \
-		name=$${workflow%%|*}; \
-		paths=$${workflow#*|}; \
-		echo "$$name expected follow-up artifacts:"; \
-		for path in $$paths; do \
+	@print_paths() { \
+		label="$$1"; shift; \
+		echo "$$label"; \
+		for path in "$$@"; do \
 			if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
-	done
-	@echo "model current/latest follow-up artifacts:"
-	@for path in $(MODEL_LATEST_OUTPUT_PATHS); do \
-		if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
-		printf '  [%s] %s\n' "$$status" "$$path"; \
-	done
-	@echo "model versioned history directory:"
-	@for path in $(MODEL_HISTORY_OUTPUT_PATHS); do \
-		if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
-		printf '  [%s] %s\n' "$$status" "$$path"; \
-	done
+	}; \
+	print_paths "scan primary text artifact:" $(SCAN_PRIMARY_OUTPUT_PATHS); \
+	print_paths "scan HTML/JSON companions:" $(SCAN_COMPANION_OUTPUT_PATHS); \
+	print_paths "portfolio primary text artifact:" $(PORTFOLIO_PRIMARY_OUTPUT_PATHS); \
+	print_paths "portfolio HTML/JSON companions:" $(PORTFOLIO_COMPANION_OUTPUT_PATHS); \
+	print_paths "dataset primary text artifact:" $(DATASET_PRIMARY_OUTPUT_PATHS); \
+	print_paths "dataset CSV/JSON companions:" $(DATASET_COMPANION_OUTPUT_PATHS); \
+	print_paths "model current/latest primary artifact:" $(MODEL_PRIMARY_OUTPUT_PATHS); \
+	print_paths "model current/latest JSON/CSV companions:" $(MODEL_COMPANION_OUTPUT_PATHS); \
+	print_paths "model versioned history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
 	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
