@@ -171,9 +171,7 @@ show-output-paths:
 		done; \
 	}; \
 	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
-	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
-	echo "note: the workflow-specific area starts with compact grouped latest-output, machine-readable companion, summary/structured follow-up, and archive/history views; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; in each workflow-specific section, start with 'open this first'; the next line gives the closest machine-readable companion; use the grouped or per-workflow summary views and structured data/model files lists for deeper follow-up or automation, and use the history/archive paths for archived runs."; \
-	echo "note: $(WORKFLOW_GROUP_PAIRING_NOTE)"; \
+	echo "note: current/latest and history/archive 'open this first' recommendations are independent and may differ by format; grouped workflow views split quick monitoring (scan/portfolio) from deeper review (dataset/model); below, the shared per-workflow line order is open this first → machine-readable companion → summary views → structured data/model files → archive → archive open this first → archive machine-readable companion."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
@@ -196,34 +194,34 @@ show-output-paths:
 	print_paths "workflow quick operational monitoring archive/history machine-readable companions:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
 	print_paths "workflow deeper review archive/history follow-up:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
 	print_paths "workflow deeper review archive/history machine-readable companions:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
-	print_paths "scan open this first for quick monitoring/post-run checks:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan latest machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "scan open this first:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist summary views:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist structured data/model files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
-	print_paths "scan archive pattern:" $(SCAN_HISTORY_OUTPUT_PATHS); \
+	print_paths "scan archive:" $(SCAN_HISTORY_OUTPUT_PATHS); \
 	print_paths "scan archive open this first:" $(SCAN_HISTORY_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan archive machine-readable companion:" $(SCAN_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "portfolio open this first for quick monitoring/post-run checks:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio latest machine-readable companion:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "portfolio open this first:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio machine-readable companion:" $(PORTFOLIO_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "portfolio summary views:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
 	print_paths "portfolio structured data/model files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
-	print_paths "portfolio archive pattern:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
+	print_paths "portfolio archive:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
 	print_paths "portfolio archive open this first:" $(PORTFOLIO_HISTORY_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "portfolio archive machine-readable companion:" $(PORTFOLIO_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "dataset open this first for deeper review/post-run checks:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset latest machine-readable companion (alternate structured form):" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "dataset open this first:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset machine-readable companion:" $(DATASET_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "dataset summary views:" $(DATASET_HUMAN_OUTPUT_PATHS); \
 	print_paths "dataset structured data/model files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
-	print_paths "dataset archive pattern:" $(DATASET_HISTORY_OUTPUT_PATHS); \
+	print_paths "dataset archive:" $(DATASET_HISTORY_OUTPUT_PATHS); \
 	print_paths "dataset archive open this first:" $(DATASET_HISTORY_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset archive machine-readable companion (alternate structured form):" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "model open this first for deeper review/post-run checks:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "model latest machine-readable companion:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "model current/latest summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
-	print_paths "model current/latest structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
-	print_paths "model history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
+	print_paths "dataset archive machine-readable companion:" $(DATASET_HISTORY_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "model open this first:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "model machine-readable companion:" $(MODEL_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "model summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
+	print_paths "model structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
+	print_paths "model archive:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
 	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
