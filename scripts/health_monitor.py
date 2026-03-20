@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
 from html import escape
@@ -11,26 +10,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REPORTS = ROOT / "reports"
 DB_PATH = ROOT / "data" / "quant.db"
-MODEL_CONFIG = ROOT / "configs" / "model.yaml"
+RUNTIME_CONFIG = REPORTS / "runtime_config.json"
 
-
-def parse_simple_yaml_section(path: Path, section: str) -> dict:
-    values = {}
-    current = None
-    if not path.exists():
-        return values
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.endswith(":"):
-            current = line[:-1]
-            continue
-        if current != section or ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        values[key.strip()] = value.strip().strip("\"'")
-    return values
+def runtime_health_config() -> dict:
+    if not RUNTIME_CONFIG.exists():
+        return {}
+    try:
+        payload = json.loads(RUNTIME_CONFIG.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    health = payload.get("health")
+    return health if isinstance(health, dict) else {}
 
 
 def parse_time(value: str):
@@ -60,7 +50,7 @@ def main() -> int:
     parser.add_argument("--source", default="manual")
     args = parser.parse_args()
 
-    health_cfg = parse_simple_yaml_section(MODEL_CONFIG, "health")
+    health_cfg = runtime_health_config()
     max_run_age_hours = float(health_cfg.get("max_run_age_hours", "30"))
     shadow_edge_alert = float(health_cfg.get("shadow_edge_alert", "0.01"))
     provider_failure_alert_count = int(float(health_cfg.get("provider_failure_alert_count", "1")))

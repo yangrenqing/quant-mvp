@@ -14,10 +14,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	appconfig "quant-mvp/internal/config"
+	appreport "quant-mvp/internal/reporting"
+	dbstore "quant-mvp/internal/store"
 )
 
 const configPath = "configs/config.yaml"
@@ -49,124 +55,16 @@ const (
 	marketKindUS     marketKind = "us"
 )
 
-type config struct {
-	AppName   string
-	DB        dbConfig
-	Schedule  scheduleConfig
-	Strategy  strategyConfig
-	Risk      riskConfig
-	Portfolio portfolioConfig
-	Regime    regimeConfig
-	Model     modelConfig
-	Report    reportConfig
-	Market    marketRuleConfig
-}
-
-type dbConfig struct {
-	Path string
-}
-
-type scheduleConfig struct {
-	DailyRun string
-	CacheTTL string
-}
-
-type modelConfig struct {
-	DefaultLabel          string
-	ModelPath             string
-	BenchmarkModelPath    string
-	PromotionMetric       string
-	MinPromotionEdge      float64
-	MinShadowObservations int
-	ShadowVersion         string
-}
-
-type reportConfig struct {
-	HistoryRoot      string
-	ExportJSON       bool
-	CleanupKeepDays  int
-	ExperimentLedger string
-	RunIndexPath     string
-}
-
-type marketRuleConfig struct {
-	AShareT1               bool
-	MainBoardLimit         float64
-	ChiNextLimit           float64
-	STARLimit              float64
-	RiskWarningLimit       float64
-	StampDutySellBps       float64
-	TransferFeeBps         float64
-	HandlingFeeBps         float64
-	CommissionBps          float64
-	IPOUncappedTradingDays int
-}
-
-type strategyConfig struct {
-	Name        string
-	Symbol      string
-	DataPath    string
-	DataSource  string
-	APIKeyEnv   string
-	ShortWindow int
-	LongWindow  int
-}
-
-type riskConfig struct {
-	MaxPosition      int
-	StopLossPct      float64
-	SkipRepeatSignal bool
-}
-
-type portfolioConfig struct {
-	RebalanceIntervalDays  int
-	WeightDriftThreshold   float64
-	MinHoldings            int
-	MaxPositionWeight      float64
-	MaxCashShare           float64
-	MaxVolatility          float64
-	MinAverageTurnover     float64
-	OverheatThreshold      float64
-	MaxHoldingDrawdown     float64
-	MinTrendGap            float64
-	StopCooldownDays       int
-	ExitCooldownDays       int
-	TrendBreakCooldownDays int
-	MomentumWeight         float64
-	PersistenceWeight      float64
-	BacktestExcessWeight   float64
-	BacktestReturnWeight   float64
-	BacktestDrawdownWeight float64
-	WatchPenalty           float64
-	TrendStrategyEnabled   bool
-	BreakoutEnabled        bool
-	PullbackEnabled        bool
-	TrendStrategyWeight    float64
-	BreakoutStrategyWeight float64
-	PullbackStrategyWeight float64
-	MinPrice               float64
-	MinBacktestExcess      float64
-	MaxBacktestDrawdown    float64
-	LimitMoveThreshold     float64
-	QualityWeight          float64
-	RiskWeight             float64
-	HeatPenaltyWeight      float64
-	ReversalWeight         float64
-	IndustryMaxPositions   int
-	VolatilityTarget       float64
-	CapacityTurnoverShare  float64
-	GapOpenThreshold       float64
-	ReserveCandidates      int
-}
-
-type regimeConfig struct {
-	CautiousExposure float64
-	RiskOffExposure  float64
-	RiskOffDrawdown  float64
-	CautiousDrawdown float64
-	BreadthRiskOff   float64
-	BreadthCautious  float64
-}
+type config = appconfig.Config
+type dbConfig = appconfig.DBConfig
+type scheduleConfig = appconfig.ScheduleConfig
+type modelConfig = appconfig.ModelConfig
+type reportConfig = appconfig.ReportConfig
+type marketRuleConfig = appconfig.MarketRuleConfig
+type strategyConfig = appconfig.StrategyConfig
+type riskConfig = appconfig.RiskConfig
+type portfolioConfig = appconfig.PortfolioConfig
+type regimeConfig = appconfig.RegimeConfig
 
 type marketBar struct {
 	Date   string
@@ -500,6 +398,10 @@ func main() {
 	gridSearch := flag.Bool("grid-search", false, "Run a portfolio parameter grid search across short/long windows")
 	exportDataset := flag.Bool("export-dataset", false, "Export a training dataset with factor features and forward-return labels")
 	dashboardOnly := flag.Bool("dashboard-only", false, "Rebuild dashboard and overview reports from the latest report files")
+	validateConfig := flag.Bool("validate-config", false, "Validate the layered runtime configuration and exit")
+	printConfigJSON := flag.Bool("print-config-json", false, "Print the merged runtime configuration as JSON and exit")
+	exportRuntimeConfigOnly := flag.Bool("export-runtime-config", false, "Write reports/runtime_config.json and exit")
+	workflowProfile := flag.String("workflow", "", "Run a built-in workflow profile: daily, weekly, intraday, or research")
 	fromDate := flag.String("from", "", "Backtest start date in YYYY-MM-DD")
 	toDate := flag.String("to", "", "Backtest end date in YYYY-MM-DD")
 	initialCash := flag.Float64("cash", 100000, "Backtest initial cash")
@@ -513,6 +415,7 @@ func main() {
 	paperMarket := flag.String("paper-market", "a_share", "Paper-trading market")
 	paperMode := flag.String("paper-mode", "live", "Paper-trading mode")
 	shadowVersion := flag.String("shadow-version", "", "Shadow strategy version name")
+	pythonBin := flag.String("python-bin", envOrDefault("PYTHON_BIN", "python3"), "Python interpreter path for workflow execution")
 	flag.Parse()
 
 	cfg, err := loadConfig(configPath)
@@ -539,8 +442,33 @@ func main() {
 	if err := os.MkdirAll(cfg.Report.HistoryRoot, 0o755); err != nil {
 		logger.Fatalf("ensure history dir: %v", err)
 	}
+	if err := exportRuntimeConfigSnapshot(cfg); err != nil {
+		logger.Fatalf("export runtime config: %v", err)
+	}
+	if *validateConfig {
+		fmt.Println("config validation: ok")
+		return
+	}
+	if *printConfigJSON {
+		content, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			logger.Fatalf("marshal config: %v", err)
+		}
+		fmt.Printf("%s\n", content)
+		return
+	}
+	if *exportRuntimeConfigOnly {
+		fmt.Printf("runtime config exported: %s\n", filepath.Join(reportsDir, "runtime_config.json"))
+		return
+	}
 	if err := cleanupOldArtifacts(); err != nil {
 		logger.Fatalf("cleanup artifacts: %v", err)
+	}
+	if strings.TrimSpace(*workflowProfile) != "" {
+		if err := runWorkflow(*workflowProfile, *pythonBin, *fromDate, *toDate, *topN, *initialCash, *feeBps, *slippageBps, *paperMarket, *paperMode, *shadowVersion); err != nil {
+			logger.Fatalf("workflow %s failed: %v", *workflowProfile, err)
+		}
+		return
 	}
 	if *dashboardOnly {
 		if err := writeDashboardReports(); err != nil {
@@ -729,6 +657,250 @@ func main() {
 	}
 }
 
+func envOrDefault(key string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envBool(key string) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes"
+}
+
+func runWorkflow(profile string, pythonBin string, fromDate string, toDate string, topN int, initialCash float64, feeBps float64, slippageBps float64, paperMarket string, paperMode string, shadowVersion string) error {
+	switch profile {
+	case "daily":
+		return runDailyWorkflow(pythonBin, fromDate, toDate, topN, initialCash, feeBps, slippageBps, shadowVersion)
+	case "weekly":
+		return runWeeklyWorkflow(pythonBin, fromDate, toDate, topN, initialCash, feeBps, slippageBps, shadowVersion)
+	case "intraday":
+		return runIntradayWorkflow(pythonBin, topN, initialCash, feeBps, slippageBps, paperMarket, paperMode, shadowVersion)
+	case "research":
+		return runResearchWorkflow()
+	default:
+		return fmt.Errorf("unsupported workflow profile %q", profile)
+	}
+}
+
+func runDailyWorkflow(pythonBin string, fromDate string, toDate string, topN int, initialCash float64, feeBps float64, slippageBps float64, shadowVersion string) error {
+	fromDate = firstNonEmpty(fromDate, os.Getenv("FROM_DATE"), "2025-01-01")
+	toDate = firstNonEmpty(toDate, os.Getenv("TO_DATE"), time.Now().Format("2006-01-02"))
+	modelLabel := firstNonEmpty(os.Getenv("MODEL_LABEL"), runtimeConfig.Model.DefaultLabel, "label_10d")
+	shadowVersion = firstNonEmpty(shadowVersion, os.Getenv("SHADOW_VERSION"), runtimeConfig.Model.ShadowVersion)
+	if topN <= 0 {
+		topN = 10
+	}
+
+	if envBool("ARCHIVE_ONLY") {
+		return runSelf("--dashboard-only")
+	}
+
+	if err := runSelf("--scan-a-share", "--top", strconv.Itoa(topN)); err != nil {
+		return err
+	}
+	if envBool("SCAN_ONLY") {
+		return nil
+	}
+	if err := runSelf("--portfolio-backtest", "--from", fromDate, "--to", toDate, "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps), "--top", "3"); err != nil {
+		return err
+	}
+	if err := runSelf("--export-dataset", "--from", fromDate, "--to", toDate); err != nil {
+		return err
+	}
+	if !envBool("SKIP_MODEL") {
+		if err := runPythonScript(pythonBin, "scripts/model_pipeline.py", "--from", fromDate, "--to", toDate, "--label", modelLabel); err != nil {
+			return err
+		}
+	}
+	if !envBool("SKIP_SHADOW") {
+		if err := runSelf("--paper-shadow-run", "--once", "--shadow-version", shadowVersion, "--top", "3", "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps)); err != nil {
+			return err
+		}
+	}
+	if !envBool("SKIP_PROMOTION") {
+		if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(runtimeConfig.Model.MinShadowObservations)); err != nil {
+			return err
+		}
+	}
+	if err := runSelf("--paper-run", "--once", "--top", "3", "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps)); err != nil {
+		return err
+	}
+	if !envBool("SKIP_FACTOR") {
+		for _, args := range [][]string{
+			{"scripts/factor_research.py", "--dataset", "reports/training_dataset.csv", "--label", modelLabel},
+			{"scripts/factor_diagnostics.py", "--dataset", "reports/training_dataset.csv"},
+			{"scripts/model_comparison.py"},
+			{"scripts/strategy_quality.py"},
+			{"scripts/research_summary.py"},
+		} {
+			if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+				return err
+			}
+		}
+	}
+	if !envBool("SKIP_HEALTH") {
+		if err := runPythonScript(pythonBin, "scripts/health_monitor.py"); err != nil {
+			return err
+		}
+	}
+	if !envBool("SKIP_EVOLUTION") {
+		for _, args := range [][]string{
+			{"scripts/evolution_report.py", "--hours", "24"},
+			{"scripts/evolution_report.py", "--preset", "overnight"},
+			{"scripts/runtime_report.py"},
+		} {
+			if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+				return err
+			}
+		}
+	}
+	return runSelf("--dashboard-only")
+}
+
+func runWeeklyWorkflow(pythonBin string, fromDate string, toDate string, topN int, initialCash float64, feeBps float64, slippageBps float64, shadowVersion string) error {
+	fromDate = firstNonEmpty(fromDate, os.Getenv("FROM_DATE"), "2025-01-01")
+	toDate = firstNonEmpty(toDate, os.Getenv("TO_DATE"), time.Now().Format("2006-01-02"))
+	modelLabel := firstNonEmpty(os.Getenv("MODEL_LABEL"), runtimeConfig.Model.DefaultLabel, "label_10d")
+	shadowVersion = firstNonEmpty(shadowVersion, os.Getenv("SHADOW_VERSION"), runtimeConfig.Model.ShadowVersion)
+
+	if err := runResearchWorkflow(); err != nil {
+		return err
+	}
+	if err := runSelf("--export-dataset", "--from", fromDate, "--to", toDate); err != nil {
+		return err
+	}
+	if !envBool("SKIP_MODEL") {
+		if err := runPythonScript(pythonBin, "scripts/model_pipeline.py", "--from", fromDate, "--to", toDate, "--label", modelLabel); err != nil {
+			return err
+		}
+	}
+	for _, args := range [][]string{
+		{"scripts/factor_research.py", "--dataset", "reports/training_dataset.csv", "--label", modelLabel},
+		{"scripts/factor_diagnostics.py", "--dataset", "reports/training_dataset.csv"},
+		{"scripts/model_comparison.py"},
+		{"scripts/strategy_quality.py"},
+		{"scripts/research_summary.py"},
+	} {
+		if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+			return err
+		}
+	}
+	if err := runSelf("--paper-shadow-run", "--once", "--shadow-version", shadowVersion, "--top", "3", "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps)); err != nil {
+		return err
+	}
+	if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(runtimeConfig.Model.MinShadowObservations)); err != nil {
+		return err
+	}
+	if !envBool("SKIP_ROLLBACK") {
+		if err := runPythonScript(pythonBin, "scripts/strategy_auto_rollback.py", "--min-edge", firstNonEmpty(os.Getenv("AUTO_ROLLBACK_EDGE"), "0.0")); err != nil {
+			return err
+		}
+	}
+	if !envBool("SKIP_HEALTH") {
+		if err := runPythonScript(pythonBin, "scripts/health_monitor.py"); err != nil {
+			return err
+		}
+	}
+	if !envBool("SKIP_EVOLUTION") {
+		for _, args := range [][]string{
+			{"scripts/evolution_report.py", "--hours", "168"},
+			{"scripts/evolution_report.py", "--preset", "overnight"},
+			{"scripts/runtime_report.py"},
+		} {
+			if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+				return err
+			}
+		}
+	}
+	return runSelf("--dashboard-only")
+}
+
+func runIntradayWorkflow(pythonBin string, topN int, initialCash float64, feeBps float64, slippageBps float64, paperMarket string, paperMode string, shadowVersion string) error {
+	if topN <= 0 {
+		topN = 3
+	}
+	shadowVersion = firstNonEmpty(shadowVersion, os.Getenv("SHADOW_VERSION"), runtimeConfig.Model.ShadowVersion)
+	if !envBool("FORCE_RUN") && !isAShareMarketOpen(time.Now()) {
+		return runPythonScript(pythonBin, "scripts/health_monitor.py", "--source", "intraday")
+	}
+	if err := runSelf("--paper-run", "--once", "--paper-market", paperMarket, "--paper-mode", paperMode, "--top", strconv.Itoa(topN), "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps)); err != nil {
+		return err
+	}
+	if !strings.EqualFold(os.Getenv("RUN_SHADOW"), "0") {
+		if err := runSelf("--paper-shadow-run", "--once", "--paper-market", paperMarket, "--paper-mode", paperMode, "--shadow-version", shadowVersion, "--top", strconv.Itoa(topN), "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps)); err != nil {
+			return err
+		}
+	}
+	for _, args := range [][]string{
+		{"scripts/health_monitor.py", "--source", "intraday"},
+		{"scripts/evolution_report.py", "--hours", "24"},
+		{"scripts/evolution_report.py", "--preset", "overnight"},
+		{"scripts/runtime_report.py"},
+	} {
+		if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+			return err
+		}
+	}
+	return runSelf("--dashboard-only")
+}
+
+func runResearchWorkflow() error {
+	for _, dir := range []string{
+		filepath.Join("research", "papers"),
+		filepath.Join("research", "factors"),
+		filepath.Join("research", "experiments"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("research workspace ready: %s\n", filepath.Join(".", "research"))
+	return nil
+}
+
+func runSelf(args ...string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(executable, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func runPythonScript(pythonBin string, script string, args ...string) error {
+	cmdArgs := append([]string{script}, args...)
+	cmd := exec.Command(pythonBin, cmdArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func isAShareMarketOpen(now time.Time) bool {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return false
+	}
+	current := now.In(location)
+	if current.Weekday() == time.Saturday || current.Weekday() == time.Sunday {
+		return false
+	}
+	hm := current.Hour()*100 + current.Minute()
+	return (hm >= 930 && hm < 1130) || (hm >= 1300 && hm < 1500)
+}
+
 func runAShareScan(strategy strategyConfig, portfolio portfolioConfig, topN int) error {
 	selected, err := loadSelectedAShareCandidates(strategy, portfolio, runtimeConfig.Regime, topN)
 	if err != nil {
@@ -758,15 +930,11 @@ func loadSelectedAShareCandidates(strategy strategyConfig, portfolio portfolioCo
 	}
 	backtestSnapshot, _ := loadBacktestSnapshot(filepath.Join(reportsDir, "backtest_scan.csv"))
 	portfolioSnapshot, _ := loadPortfolioHoldingsSnapshot(filepath.Join(reportsDir, "portfolio_backtest.csv"))
+	series := loadAShareSeries(symbols, strategy.LongWindow)
 
-	candidates := make([]scanCandidate, 0, len(symbols))
-	for _, symbol := range symbols {
-		bars, dataSource, sourceErr, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
-		if err != nil || len(bars) < strategy.LongWindow {
-			continue
-		}
-
-		candidate, err := rankCandidate(symbol.Symbol, symbol.Name, symbol.Industry, bars, dataSource, sourceErr, strategy, portfolio)
+	candidates := make([]scanCandidate, 0, len(series))
+	for _, item := range series {
+		candidate, err := rankCandidate(item.meta.Symbol, item.meta.Name, item.meta.Industry, item.bars, item.dataSource, "", strategy, portfolio)
 		if err != nil {
 			continue
 		}
@@ -819,16 +987,11 @@ func runBatchBacktest(strategy strategyConfig, risk riskConfig, fromDate string,
 	if err != nil {
 		return nil, err
 	}
+	series := loadAShareSeries(symbols, strategy.LongWindow)
 
-	results := make([]backtestResult, 0, len(symbols))
-	for _, symbol := range symbols {
-		bars, dataSource, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
-		mode := modeFromDataSource(dataSource)
-		if err != nil {
-			continue
-		}
-
-		result, err := simulateBacktest(symbol.Symbol, symbol.Name, bars, mode, strategy.ShortWindow, strategy.LongWindow, risk, fromDate, toDate, initialCash, feeBps, slippageBps)
+	results := make([]backtestResult, 0, len(series))
+	for _, item := range series {
+		result, err := simulateBacktest(item.meta.Symbol, item.meta.Name, item.bars, modeFromDataSource(item.dataSource), strategy.ShortWindow, strategy.LongWindow, risk, fromDate, toDate, initialCash, feeBps, slippageBps)
 		if err != nil {
 			continue
 		}
@@ -861,17 +1024,14 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		topN = 5
 	}
 
-	series := make([]marketSeries, 0, len(symbols))
+	loadedSeries := loadAShareSeries(symbols, strategy.LongWindow)
+	series := make([]marketSeries, 0, len(loadedSeries))
 	mode := "live"
-	for _, symbol := range symbols {
-		bars, dataSource, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
-		if err != nil {
-			continue
-		}
-		if modeFromDataSource(dataSource) == "test" {
+	for _, item := range loadedSeries {
+		if modeFromDataSource(item.dataSource) == "test" {
 			mode = "test"
 		}
-		series = append(series, marketSeries{meta: symbol, bars: bars})
+		series = append(series, marketSeries{meta: item.meta, bars: item.bars})
 	}
 	if len(series) == 0 {
 		return portfolioBacktestResult{}, errors.New("no market data available for portfolio backtest")
@@ -1582,14 +1742,11 @@ func exportTrainingDataset(strategy strategyConfig, portfolio portfolioConfig, r
 	if err != nil {
 		return nil, err
 	}
+	loadedSeries := loadAShareSeries(symbols, max(strategy.LongWindow, 21))
 
-	series := make([]marketSeries, 0, len(symbols))
-	for _, symbol := range symbols {
-		bars, _, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
-		if err != nil || len(bars) < max(strategy.LongWindow, 21) {
-			continue
-		}
-		series = append(series, marketSeries{meta: symbol, bars: bars})
+	series := make([]marketSeries, 0, len(loadedSeries))
+	for _, item := range loadedSeries {
+		series = append(series, marketSeries{meta: item.meta, bars: item.bars})
 	}
 	if len(series) == 0 {
 		return nil, errors.New("no market data available for dataset export")
@@ -2951,7 +3108,7 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%d</td><td>%.2f%%</td><td>%.2f</td></tr>`,
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%.2f%%</td><td>%d</td><td>%.2f</td></tr>`,
 			i+1,
 			html.EscapeString(result.Symbol),
 			html.EscapeString(name),
@@ -2960,8 +3117,8 @@ func writeBatchBacktestReports(results []backtestResult, fromDate string, toDate
 			result.BenchmarkReturn*100,
 			result.ExcessReturn*100,
 			result.MaxDrawdown*100,
-			result.TradeCount,
 			result.WinRate*100,
+			result.TradeCount,
 			result.FinalEquity,
 		)
 	}
@@ -3922,6 +4079,45 @@ func writeDashboardReports() error {
 		return err
 	}
 
+	runIndexPath := runtimeConfig.Report.RunIndexPath
+	if strings.TrimSpace(runIndexPath) == "" {
+		runIndexPath = filepath.Join(reportsDir, "run_index.jsonl")
+	}
+	historyPayload, historyText, historyHTML := appreport.BuildHistoryCompareReport(runIndexPath)
+	if err := os.WriteFile(historyTextPath, []byte(historyText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(historyHTMLPath, []byte(historyHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(historyJSONPath, historyPayload); err != nil {
+		return err
+	}
+
+	marketPayload, marketText, marketHTML := appreport.BuildMarketOverviewReport(reportsDir)
+	if err := os.WriteFile(marketTextPath, []byte(marketText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(marketHTMLPath, []byte(marketHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(marketJSONPath, marketPayload); err != nil {
+		return err
+	}
+
+	lifecyclePayload, lifecycleText, lifecycleHTML := appreport.BuildStrategyLifecycleReport(runtimeConfig.DB.Path, func(sql string) (string, error) {
+		return runSQLiteQuery(runtimeConfig.DB.Path, sql)
+	})
+	if err := os.WriteFile(lifecycleTextPath, []byte(lifecycleText), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(lifecycleHTMLPath, []byte(lifecycleHTML), 0o644); err != nil {
+		return err
+	}
+	if err := writeJSONFile(lifecycleJSONPath, lifecyclePayload); err != nil {
+		return err
+	}
+
 	sections := []struct {
 		title string
 		path  string
@@ -3961,21 +4157,25 @@ func writeDashboardReports() error {
 		})
 	}
 
-	todayCard := buildTodayConclusionCard()
-	riskCard := buildRiskAlertCard()
-	changeCard := buildChangeCard()
-	strongWeakCard := buildStrengthCard()
-	holdingCard := buildHoldingCard()
-	evolutionCard := buildStrategyEvolutionCard()
-	lifecycleCard := buildLifecycleSummaryCard()
-	healthCard := buildHealthSummaryCard()
-	factorCard := buildFactorSummaryCard()
-	researchCard := buildResearchSummaryCard()
-	modelCard := buildModelComparisonCard()
-	strategyQualityCard := buildStrategyQualitySummaryCard()
-	runtimeCard := buildRuntimeSummaryCard()
-	evolutionSummaryCard := buildEvolutionSummaryCard()
-	overnightEvolutionCard := buildOvernightEvolutionSummaryCard()
+	summary := appreport.BuildSummaryCards(appreport.Inputs{
+		ReportsDir:  reportsDir,
+		HistoryRoot: reportHistoryRoot(),
+	})
+	todayCard := summary.TodayConclusion
+	riskCard := summary.RiskAlerts
+	changeCard := summary.Changes
+	strongWeakCard := summary.StrongWeak
+	holdingCard := summary.CurrentHoldings
+	evolutionCard := summary.StrategyEvolution
+	lifecycleCard := summary.LifecycleSummary
+	healthCard := summary.SystemHealth
+	factorCard := summary.FactorResearch
+	researchCard := summary.ResearchSummary
+	modelCard := summary.ModelComparison
+	strategyQualityCard := summary.StrategyQuality
+	runtimeCard := summary.RuntimeSummary
+	evolutionSummaryCard := summary.EvolutionSummary
+	overnightEvolutionCard := summary.OvernightEvolution
 
 	var textBuilder strings.Builder
 	textBuilder.WriteString("Quant MVP Dashboard\n\n")
@@ -4029,9 +4229,9 @@ func writeDashboardReports() error {
 		)
 	}
 
-	var cards strings.Builder
+	var detailCards strings.Builder
 	for _, section := range rendered {
-		fmt.Fprintf(&cards, `<section class="card"><h2>%s</h2><div class="stamp">%s</div><pre>%s</pre></section>`,
+		fmt.Fprintf(&detailCards, `<section class="card"><h2>%s</h2><div class="stamp">%s</div><pre>%s</pre></section>`,
 			html.EscapeString(section.Title),
 			html.EscapeString(section.Stamp),
 			html.EscapeString(section.Content),
@@ -4069,7 +4269,7 @@ func writeDashboardReports() error {
     <div class="grid">%s</div>
   </div>
 </body>
-</html>`, summaryCards.String(), cards.String())
+</html>`, summaryCards.String(), detailCards.String())
 
 	if err := os.WriteFile(textPath, []byte(textBuilder.String()), 0o644); err != nil {
 		return err
@@ -4098,36 +4298,6 @@ func writeDashboardReports() error {
 	if err := writeJSONFile(jsonPath, payload); err != nil {
 		return err
 	}
-	historyPayload, historyText, historyHTML := buildHistoryCompareReport()
-	if err := os.WriteFile(historyTextPath, []byte(historyText), 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(historyHTMLPath, []byte(historyHTML), 0o644); err != nil {
-		return err
-	}
-	if err := writeJSONFile(historyJSONPath, historyPayload); err != nil {
-		return err
-	}
-	marketPayload, marketText, marketHTML := buildMarketOverviewReport()
-	if err := os.WriteFile(marketTextPath, []byte(marketText), 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(marketHTMLPath, []byte(marketHTML), 0o644); err != nil {
-		return err
-	}
-	if err := writeJSONFile(marketJSONPath, marketPayload); err != nil {
-		return err
-	}
-	lifecyclePayload, lifecycleText, lifecycleHTML := buildStrategyLifecycleReport()
-	if err := os.WriteFile(lifecycleTextPath, []byte(lifecycleText), 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(lifecycleHTMLPath, []byte(lifecycleHTML), 0o644); err != nil {
-		return err
-	}
-	if err := writeJSONFile(lifecycleJSONPath, lifecyclePayload); err != nil {
-		return err
-	}
 	if runtimeConfig.DB.Path != "" {
 		summaryJSON, _ := json.Marshal(payload)
 		sql := fmt.Sprintf("INSERT INTO dashboard_snapshots (generated_at, summary_json) VALUES (%s, %s);",
@@ -4149,6 +4319,10 @@ func writeJSONFile(path string, payload any) error {
 		return err
 	}
 	return os.WriteFile(path, content, 0o644)
+}
+
+func exportRuntimeConfigSnapshot(cfg config) error {
+	return appconfig.WriteRuntimeSnapshot(filepath.Join(reportsDir, "runtime_config.json"), cfg)
 }
 
 func reportHistoryRoot() string {
@@ -4527,535 +4701,6 @@ func paperSessionForMarket(market string, now time.Time) string {
 	return "closed"
 }
 
-func buildTodayConclusionCard() string {
-	focus, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
-	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
-	firstFocus := firstMatchingLine(focus, []string{"1."})
-	regimeLine := firstMatchingLine(portfolio, []string{"Regime:", "Target exposure:", "Total return:"})
-	if firstFocus == "" && regimeLine == "" {
-		return "今天还没有完整日报，先运行 scan 和 portfolio backtest。"
-	}
-	return strings.TrimSpace(firstFocus + " " + regimeLine)
-}
-
-func buildRiskAlertCard() string {
-	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
-	diagnostics, _ := readDashboardSection(filepath.Join(reportsDir, "diagnostics.txt"))
-	alerts := make([]string, 0, 3)
-	for _, prefix := range []string{"Regime:", "Excess return:", "Max drawdown:"} {
-		if line := firstMatchingLine(portfolio, []string{prefix}); line != "" {
-			alerts = append(alerts, line)
-		}
-	}
-	if line := firstMatchingLine(diagnostics, []string{"Provider failures:", "-"}); line != "" {
-		alerts = append(alerts, "Diagnostics: "+line)
-	}
-	if len(alerts) == 0 {
-		return "当前没有明显的系统级风险告警。"
-	}
-	return strings.Join(alerts, " | ")
-}
-
-func buildChangeCard() string {
-	current, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
-	previousPath := latestHistoricalFileBeforeToday("a_share_scan", "a_share_focus.txt")
-	if previousPath == "" {
-		return "还没有昨日快照，今天起会自动归档。"
-	}
-	previousBytes, err := os.ReadFile(previousPath)
-	if err != nil {
-		return "昨日快照读取失败。"
-	}
-	currentSymbols := extractLeadingSymbols(current)
-	previousSymbols := extractLeadingSymbols(string(previousBytes))
-	added := diffStrings(currentSymbols, previousSymbols)
-	removed := diffStrings(previousSymbols, currentSymbols)
-	if len(added) == 0 && len(removed) == 0 {
-		return "关注名单与昨日相同。"
-	}
-	parts := make([]string, 0, 2)
-	if len(added) > 0 {
-		parts = append(parts, "新增: "+strings.Join(added, ", "))
-	}
-	if len(removed) > 0 {
-		parts = append(parts, "移出: "+strings.Join(removed, ", "))
-	}
-	return strings.Join(parts, " | ")
-}
-
-func buildStrengthCard() string {
-	scan, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_scan.txt"))
-	symbols := extractLeadingSymbols(scan)
-	if len(symbols) == 0 {
-		return "还没有扫描结果。"
-	}
-	strong := symbols[0]
-	weak := symbols[len(symbols)-1]
-	return fmt.Sprintf("最强候选: %s | 最弱候选: %s", strong, weak)
-}
-
-func buildHoldingCard() string {
-	portfolio, _ := readDashboardSection(filepath.Join(reportsDir, "portfolio_backtest.txt"))
-	if line := firstMatchingLine(portfolio, []string{"Current holdings:"}); line != "" {
-		return strings.TrimPrefix(line, "Current holdings: ")
-	}
-	return "当前没有组合持仓快照。"
-}
-
-func buildStrategyEvolutionCard() string {
-	if strings.TrimSpace(runtimeConfig.DB.Path) == "" {
-		return "策略演进数据库未启用。"
-	}
-	query := `SELECT strategy_version, mode, market_date, equity, order_count FROM paper_daily_metrics WHERE mode = 'live' OR mode LIKE 'shadow:%' ORDER BY id DESC LIMIT 20;`
-	output, err := runSQLiteQuery(runtimeConfig.DB.Path, query)
-	if err != nil || strings.TrimSpace(output) == "" {
-		return "还没有 active / shadow 对比数据。"
-	}
-	type metric struct {
-		Version string
-		Mode    string
-		Date    string
-		Equity  float64
-		Orders  int
-	}
-	metrics := make([]metric, 0)
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		parts := strings.Split(line, "|")
-		if len(parts) != 5 {
-			continue
-		}
-		equity, _ := strconv.ParseFloat(parts[3], 64)
-		orders, _ := strconv.Atoi(parts[4])
-		metrics = append(metrics, metric{Version: parts[0], Mode: parts[1], Date: parts[2], Equity: equity, Orders: orders})
-	}
-	var active *metric
-	var shadow *metric
-	for _, item := range metrics {
-		if active == nil && item.Mode == "live" {
-			copy := item
-			active = &copy
-		}
-		if shadow == nil && strings.HasPrefix(item.Mode, "shadow:") {
-			copy := item
-			shadow = &copy
-		}
-	}
-	if active == nil && shadow == nil {
-		return "还没有 active / shadow 对比数据。"
-	}
-	if active != nil && shadow == nil {
-		return fmt.Sprintf("当前 active=%s equity=%.2f，尚无 shadow 账户。", active.Version, active.Equity)
-	}
-	if active == nil && shadow != nil {
-		return fmt.Sprintf("当前 shadow=%s equity=%.2f，尚无 active 对比。", shadow.Version, shadow.Equity)
-	}
-	diff := shadow.Equity - active.Equity
-	return fmt.Sprintf("active=%s equity=%.2f | shadow=%s equity=%.2f | diff=%.2f | market_date=%s", active.Version, active.Equity, shadow.Version, shadow.Equity, diff, active.Date)
-}
-
-func buildLifecycleSummaryCard() string {
-	if strings.TrimSpace(runtimeConfig.DB.Path) == "" {
-		return "生命周期数据库未启用。"
-	}
-	activeOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT version_name FROM strategy_registry WHERE status = 'active' ORDER BY id DESC LIMIT 1;")
-	activeVersion := strings.TrimSpace(activeOutput)
-	countOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT COUNT(*) FROM strategy_registry;")
-	eventOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT event_type, from_version, to_version FROM strategy_promotions ORDER BY id DESC LIMIT 1;")
-	if activeVersion == "" {
-		activeVersion = "none"
-	}
-	versionCount := strings.TrimSpace(countOutput)
-	lastEvent := "no events"
-	if strings.TrimSpace(eventOutput) != "" {
-		parts := strings.Split(strings.TrimSpace(eventOutput), "|")
-		if len(parts) == 3 {
-			lastEvent = fmt.Sprintf("%s %s -> %s", parts[0], parts[1], parts[2])
-		}
-	}
-	return fmt.Sprintf("active=%s | versions=%s | last_event=%s", activeVersion, versionCount, lastEvent)
-}
-
-func buildHealthSummaryCard() string {
-	health, _ := readDashboardSection(filepath.Join(reportsDir, "health_monitor.txt"))
-	statusLine := firstMatchingLine(health, []string{"Status:", "Active strategy:", "Latest run:"})
-	if statusLine == "" {
-		return "系统健康报告尚未生成。"
-	}
-	providerLine := firstMatchingLine(health, []string{"Provider failures:", "Shadow equity:", "Active equity:"})
-	if providerLine == "" || providerLine == statusLine {
-		return statusLine
-	}
-	return statusLine + " | " + providerLine
-}
-
-func buildFactorSummaryCard() string {
-	factors, _ := readDashboardSection(filepath.Join(reportsDir, "factor_research.txt"))
-	rowLine := firstMatchingLine(factors, []string{"Rows:", "Features:", "Top factor correlations:"})
-	if rowLine == "" {
-		return "因子研究报告尚未生成。"
-	}
-	bestLine := firstMatchingLine(factors, []string{"- "})
-	if bestLine == "" {
-		return rowLine
-	}
-	return rowLine + " | " + bestLine
-}
-
-func buildResearchSummaryCard() string {
-	report, _ := readDashboardSection(filepath.Join(reportsDir, "research_summary.txt"))
-	summaryLine := firstNonEmptyLine(report)
-	if summaryLine == "" {
-		return "研究摘要尚未生成。"
-	}
-	verdictLine := firstMatchingLine(report, []string{"Verdict:"})
-	if verdictLine == "" || verdictLine == summaryLine {
-		return summaryLine
-	}
-	return summaryLine + " | " + verdictLine
-}
-
-func buildModelComparisonCard() string {
-	report, _ := readDashboardSection(filepath.Join(reportsDir, "model_comparison.txt"))
-	regLine := firstMatchingLine(report, []string{"- test directional accuracy:", "- rolling directional accuracy:"})
-	clsLine := lastMatchingLine(report, []string{"- test directional accuracy:", "- rolling directional accuracy:"})
-	verdictLine := firstMatchingLine(report, []string{"Verdict:"})
-	parts := make([]string, 0, 3)
-	if regLine != "" {
-		parts = append(parts, "reg "+strings.TrimPrefix(regLine, "- "))
-	}
-	if clsLine != "" && clsLine != regLine {
-		parts = append(parts, "cls "+strings.TrimPrefix(clsLine, "- "))
-	}
-	if verdictLine != "" {
-		parts = append(parts, verdictLine)
-	}
-	if len(parts) == 0 {
-		return "模型对比报告尚未生成。"
-	}
-	return strings.Join(parts, " | ")
-}
-
-func buildStrategyQualitySummaryCard() string {
-	report, _ := readDashboardSection(filepath.Join(reportsDir, "strategy_quality.txt"))
-	total := firstMatchingLine(report, []string{"- total return:"})
-	excess := firstMatchingLine(report, []string{"- excess return:"})
-	verdict := firstMatchingLine(report, []string{"Verdict:"})
-	parts := make([]string, 0, 3)
-	for _, item := range []string{total, excess, verdict} {
-		if item != "" {
-			parts = append(parts, item)
-		}
-	}
-	if len(parts) == 0 {
-		return "策略质量报告尚未生成。"
-	}
-	return strings.Join(parts, " | ")
-}
-
-func buildRuntimeSummaryCard() string {
-	report, _ := readDashboardSection(filepath.Join(reportsDir, "runtime_report.txt"))
-	runtimeLine := firstMatchingLine(report, []string{"Runtime:", "Total runs:"})
-	startLine := firstMatchingLine(report, []string{"Started at:", "Latest run at:"})
-	last24Line := firstMatchingLine(report, []string{"Last 24h runs:"})
-	parts := make([]string, 0, 3)
-	for _, item := range []string{startLine, runtimeLine, last24Line} {
-		if item != "" {
-			parts = append(parts, item)
-		}
-	}
-	if len(parts) == 0 {
-		return "运行时长报告尚未生成。"
-	}
-	return strings.Join(parts, " | ")
-}
-
-func buildEvolutionSummaryCard() string {
-	report, _ := readDashboardSection(filepath.Join(reportsDir, "evolution_report.txt"))
-	runLine := firstMatchingLine(report, []string{"Run count:", "Lifecycle events:", "Model versions built:"})
-	if runLine == "" {
-		return "演化报告尚未生成。"
-	}
-	promotionLine := firstMatchingLine(report, []string{"Regression promotions:", "Classifier promotions:", "Active vs shadow equity diff:"})
-	if promotionLine == "" || promotionLine == runLine {
-		return runLine
-	}
-	return runLine + " | " + promotionLine
-}
-
-func firstNonEmptyLine(content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasSuffix(line, "Summary") || strings.HasSuffix(line, "Quality") || strings.HasSuffix(line, "Diagnostics") || strings.HasSuffix(line, "Comparison") {
-			continue
-		}
-		return line
-	}
-	return ""
-}
-
-func lastMatchingLine(content string, prefixes []string) string {
-	lines := strings.Split(content, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(line, prefix) {
-				return line
-			}
-		}
-	}
-	return ""
-}
-
-func buildOvernightEvolutionSummaryCard() string {
-	report, _ := readDashboardSection(filepath.Join(reportsDir, "evolution_report_overnight.txt"))
-	runLine := firstMatchingLine(report, []string{"Run count:", "Lifecycle events:", "Model versions built:"})
-	if runLine == "" {
-		return "隔夜演化报告尚未生成。"
-	}
-	promotionLine := firstMatchingLine(report, []string{"Regression promotions:", "Classifier promotions:", "Active vs shadow equity diff:"})
-	if promotionLine == "" || promotionLine == runLine {
-		return runLine
-	}
-	return runLine + " | " + promotionLine
-}
-
-func latestHistoricalFileBeforeToday(runType string, fileName string) string {
-	root := reportHistoryRoot()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return ""
-	}
-	today := time.Now().Format("2006-01-02")
-	dates := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() < today {
-			dates = append(dates, entry.Name())
-		}
-	}
-	sort.Strings(dates)
-	for i := len(dates) - 1; i >= 0; i-- {
-		path := filepath.Join(root, dates[i], runType, fileName)
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return ""
-}
-
-func extractLeadingSymbols(content string) []string {
-	lines := strings.Split(content, "\n")
-	symbols := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "1.") && !strings.HasPrefix(line, "2.") && !strings.HasPrefix(line, "3.") && !strings.HasPrefix(line, "4.") && !strings.HasPrefix(line, "5.") && !strings.HasPrefix(line, "6.") && !strings.HasPrefix(line, "7.") && !strings.HasPrefix(line, "8.") && !strings.HasPrefix(line, "9.") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			symbols = append(symbols, fields[1])
-		}
-	}
-	return symbols
-}
-
-func diffStrings(left []string, right []string) []string {
-	rightSet := map[string]struct{}{}
-	for _, item := range right {
-		rightSet[item] = struct{}{}
-	}
-	var diff []string
-	for _, item := range left {
-		if _, ok := rightSet[item]; !ok {
-			diff = append(diff, item)
-		}
-	}
-	return diff
-}
-
-func firstMatchingLine(content string, prefixes []string) string {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(trimmed, prefix) {
-				return trimmed
-			}
-		}
-	}
-	return ""
-}
-
-func buildHistoryCompareReport() (map[string]any, string, string) {
-	lines := make([]string, 0)
-	rows := make([]string, 0)
-	payload := []map[string]any{}
-	runIndexPath := runtimeConfig.Report.RunIndexPath
-	content, err := os.ReadFile(runIndexPath)
-	if err != nil {
-		text := "History Compare\n\nNo run history yet.\n"
-		html := `<!doctype html><html><body><pre>No run history yet.</pre></body></html>`
-		return map[string]any{"entries": payload}, text, html
-	}
-	type historyEntry struct {
-		RunType string         `json:"run_type"`
-		When    string         `json:"generated_at"`
-		Summary map[string]any `json:"summary"`
-	}
-	entries := make([]historyEntry, 0)
-	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var entry historyEntry
-		if err := json.Unmarshal([]byte(line), &entry); err == nil {
-			entries = append(entries, entry)
-		}
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].When > entries[j].When })
-	limit := min(12, len(entries))
-	lines = append(lines, "History Compare", "")
-	for i := 0; i < limit; i++ {
-		entry := entries[i]
-		lines = append(lines, fmt.Sprintf("%s | %s | %v", entry.When, entry.RunType, entry.Summary))
-		rows = append(rows, fmt.Sprintf("<tr><td>%s</td><td>%s</td><td><pre>%s</pre></td></tr>",
-			html.EscapeString(entry.When),
-			html.EscapeString(entry.RunType),
-			html.EscapeString(fmt.Sprintf("%v", entry.Summary)),
-		))
-		payload = append(payload, map[string]any{
-			"generated_at": entry.When,
-			"run_type":     entry.RunType,
-			"summary":      entry.Summary,
-		})
-	}
-	text := strings.Join(lines, "\n") + "\n"
-	htmlContent := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>History Compare</title><style>body{font-family:Georgia,serif;background:#f4efe6;color:#1f1b16}.wrap{max-width:1100px;margin:36px auto;padding:0 20px}.card{background:#fffaf3;border:1px solid #d9cfbf;border-radius:18px;padding:24px}table{width:100%%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #e7dece;vertical-align:top}pre{margin:0;white-space:pre-wrap}</style></head><body><div class="wrap"><div class="card"><h1>History Compare</h1><table><thead><tr><th>When</th><th>Run Type</th><th>Summary</th></tr></thead><tbody>%s</tbody></table></div></div></body></html>`, strings.Join(rows, ""))
-	return map[string]any{"entries": payload}, text, htmlContent
-}
-
-func buildMarketOverviewReport() (map[string]any, string, string) {
-	usPlan, _ := readDashboardSection(filepath.Join(reportsDir, "latest_plan.txt"))
-	aShareFocus, _ := readDashboardSection(filepath.Join(reportsDir, "a_share_focus.txt"))
-	payload := map[string]any{
-		"a_share_focus": aShareFocus,
-		"us_plan":       usPlan,
-	}
-	text := "Market Overview\n\nUS / Single-symbol Plan\n" + usPlan + "\n\nA-Share Focus\n" + aShareFocus + "\n"
-	htmlContent := fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Market Overview</title><style>body{font-family:Georgia,serif;background:#f4efe6;color:#1f1b16}.wrap{max-width:1100px;margin:36px auto;padding:0 20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:#fffaf3;border:1px solid #d9cfbf;border-radius:18px;padding:24px}pre{white-space:pre-wrap}</style></head><body><div class="wrap"><h1>Market Overview</h1><div class="grid"><div class="card"><h2>US / Single-symbol</h2><pre>%s</pre></div><div class="card"><h2>A-Share Focus</h2><pre>%s</pre></div></div></div></body></html>`, html.EscapeString(usPlan), html.EscapeString(aShareFocus))
-	return payload, text, htmlContent
-}
-
-func buildStrategyLifecycleReport() (map[string]any, string, string) {
-	if strings.TrimSpace(runtimeConfig.DB.Path) == "" {
-		payload := map[string]any{"rows": []map[string]any{}, "events": []map[string]any{}}
-		return payload, "Strategy Lifecycle\n\nDatabase disabled.\n", "<html><body><pre>Database disabled.</pre></body></html>"
-	}
-
-	registryOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT version_name, status, parent_version, activated_at, archived_at FROM strategy_registry ORDER BY id DESC LIMIT 20;")
-	eventOutput, _ := runSQLiteQuery(runtimeConfig.DB.Path, "SELECT event_type, from_version, to_version, trigger_reason, recorded_at FROM strategy_promotions ORDER BY id DESC LIMIT 20;")
-
-	type lifecycleRow struct {
-		Version       string `json:"version"`
-		Status        string `json:"status"`
-		ParentVersion string `json:"parent_version"`
-		ActivatedAt   string `json:"activated_at"`
-		ArchivedAt    string `json:"archived_at"`
-	}
-	type lifecycleEvent struct {
-		EventType string `json:"event_type"`
-		From      string `json:"from_version"`
-		To        string `json:"to_version"`
-		Reason    string `json:"reason"`
-		Recorded  string `json:"recorded_at"`
-	}
-
-	rows := make([]lifecycleRow, 0)
-	if strings.TrimSpace(registryOutput) != "" {
-		for _, line := range strings.Split(strings.TrimSpace(registryOutput), "\n") {
-			parts := strings.Split(line, "|")
-			if len(parts) != 5 {
-				continue
-			}
-			rows = append(rows, lifecycleRow{
-				Version: parts[0], Status: parts[1], ParentVersion: parts[2], ActivatedAt: parts[3], ArchivedAt: parts[4],
-			})
-		}
-	}
-	events := make([]lifecycleEvent, 0)
-	if strings.TrimSpace(eventOutput) != "" {
-		for _, line := range strings.Split(strings.TrimSpace(eventOutput), "\n") {
-			parts := strings.Split(line, "|")
-			if len(parts) != 5 {
-				continue
-			}
-			events = append(events, lifecycleEvent{
-				EventType: parts[0], From: parts[1], To: parts[2], Reason: parts[3], Recorded: parts[4],
-			})
-		}
-	}
-
-	var textBuilder strings.Builder
-	textBuilder.WriteString("Strategy Lifecycle\n\nRegistry\n")
-	if len(rows) == 0 {
-		textBuilder.WriteString("No strategy versions recorded.\n")
-	} else {
-		for i, row := range rows {
-			fmt.Fprintf(&textBuilder, "%d. %s status=%s parent=%s activated=%s archived=%s\n", i+1, row.Version, row.Status, row.ParentVersion, row.ActivatedAt, row.ArchivedAt)
-		}
-	}
-	textBuilder.WriteString("\nEvents\n")
-	if len(events) == 0 {
-		textBuilder.WriteString("No promotion events recorded.\n")
-	} else {
-		for i, event := range events {
-			fmt.Fprintf(&textBuilder, "%d. %s %s -> %s at %s reason=%s\n", i+1, event.EventType, event.From, event.To, event.Recorded, event.Reason)
-		}
-	}
-
-	var registryRows strings.Builder
-	for _, row := range rows {
-		fmt.Fprintf(&registryRows, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
-			html.EscapeString(row.Version),
-			html.EscapeString(row.Status),
-			html.EscapeString(row.ParentVersion),
-			html.EscapeString(row.ActivatedAt),
-			html.EscapeString(row.ArchivedAt),
-		)
-	}
-	var eventRows strings.Builder
-	for _, event := range events {
-		fmt.Fprintf(&eventRows, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
-			html.EscapeString(event.EventType),
-			html.EscapeString(event.From),
-			html.EscapeString(event.To),
-			html.EscapeString(event.Recorded),
-			html.EscapeString(event.Reason),
-		)
-	}
-
-	htmlContent := fmt.Sprintf(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Strategy Lifecycle</title>
-  <style>
-    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
-    .wrap { max-width: 1200px; margin: 36px auto; padding: 0 20px; }
-    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
-    table { width: 100%%; border-collapse: collapse; font-size: 15px; margin-bottom: 24px; }
-    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #e7dece; vertical-align: top; }
-    th { font-size: 12px; text-transform: uppercase; color: #6d6559; }
-  </style>
-</head>
-<body><div class="wrap"><div class="card"><h1>Strategy Lifecycle</h1><h2>Registry</h2><table><thead><tr><th>Version</th><th>Status</th><th>Parent</th><th>Activated</th><th>Archived</th></tr></thead><tbody>%s</tbody></table><h2>Events</h2><table><thead><tr><th>Event</th><th>From</th><th>To</th><th>Recorded</th><th>Reason</th></tr></thead><tbody>%s</tbody></table></div></div></body></html>`, registryRows.String(), eventRows.String())
-
-	payload := map[string]any{"rows": rows, "events": events}
-	return payload, textBuilder.String(), htmlContent
-}
-
 func loadBacktestSnapshot(path string) (map[string]backtestResult, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -5194,922 +4839,11 @@ func min(a int, b int) int {
 }
 
 func loadConfig(path string) (config, error) {
-	configDir := filepath.Dir(path)
-	paths := []string{
-		path,
-		filepath.Join(configDir, "data.yaml"),
-		filepath.Join(configDir, "portfolio.yaml"),
-		filepath.Join(configDir, "model.yaml"),
-		filepath.Join(configDir, "market.yaml"),
-		filepath.Join(configDir, "report.yaml"),
-		filepath.Join(configDir, "local.yaml"),
-	}
-	var merged strings.Builder
-	for _, candidatePath := range paths {
-		content, err := os.ReadFile(candidatePath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return config{}, err
-		}
-		merged.Write(content)
-		merged.WriteString("\n")
-	}
-
-	var cfg = config{
-		Market: marketRuleConfig{
-			AShareT1:               true,
-			MainBoardLimit:         0.10,
-			ChiNextLimit:           0.20,
-			STARLimit:              0.20,
-			RiskWarningLimit:       0.05,
-			StampDutySellBps:       5.0,
-			TransferFeeBps:         0.1,
-			HandlingFeeBps:         0.341,
-			CommissionBps:          3.0,
-			IPOUncappedTradingDays: 5,
-		},
-	}
-	var section string
-
-	for lineNumber, raw := range strings.Split(merged.String(), "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		if strings.HasSuffix(line, ":") {
-			section = strings.TrimSuffix(line, ":")
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			return config{}, fmt.Errorf("invalid config line %d", lineNumber+1)
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-
-		switch section {
-		case "app":
-			if key == "name" {
-				cfg.AppName = value
-			}
-		case "db":
-			if key == "path" {
-				cfg.DB.Path = value
-			}
-		case "schedule":
-			if key == "daily_run" {
-				cfg.Schedule.DailyRun = value
-			}
-			if key == "cache_ttl" {
-				cfg.Schedule.CacheTTL = value
-			}
-		case "model":
-			switch key {
-			case "default_label":
-				cfg.Model.DefaultLabel = value
-			case "model_path":
-				cfg.Model.ModelPath = value
-			case "benchmark_model_path":
-				cfg.Model.BenchmarkModelPath = value
-			case "promotion_metric":
-				cfg.Model.PromotionMetric = value
-			case "min_promotion_edge":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid model.min_promotion_edge: %w", convErr)
-				}
-				cfg.Model.MinPromotionEdge = v
-			case "min_shadow_observations":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid model.min_shadow_observations: %w", convErr)
-				}
-				cfg.Model.MinShadowObservations = v
-			case "shadow_version":
-				cfg.Model.ShadowVersion = value
-			}
-		case "report":
-			switch key {
-			case "history_root":
-				cfg.Report.HistoryRoot = value
-			case "export_json":
-				v, convErr := strconv.ParseBool(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid report.export_json: %w", convErr)
-				}
-				cfg.Report.ExportJSON = v
-			case "cleanup_keep_days":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid report.cleanup_keep_days: %w", convErr)
-				}
-				cfg.Report.CleanupKeepDays = v
-			case "experiment_ledger":
-				cfg.Report.ExperimentLedger = value
-			case "run_index_path":
-				cfg.Report.RunIndexPath = value
-			}
-		case "market":
-			switch key {
-			case "a_share_t1":
-				v, convErr := strconv.ParseBool(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.a_share_t1: %w", convErr)
-				}
-				cfg.Market.AShareT1 = v
-			case "main_board_limit":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.main_board_limit: %w", convErr)
-				}
-				cfg.Market.MainBoardLimit = v
-			case "chinext_limit":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.chinext_limit: %w", convErr)
-				}
-				cfg.Market.ChiNextLimit = v
-			case "star_limit":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.star_limit: %w", convErr)
-				}
-				cfg.Market.STARLimit = v
-			case "risk_warning_limit":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.risk_warning_limit: %w", convErr)
-				}
-				cfg.Market.RiskWarningLimit = v
-			case "stamp_duty_sell_bps":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.stamp_duty_sell_bps: %w", convErr)
-				}
-				cfg.Market.StampDutySellBps = v
-			case "transfer_fee_bps":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.transfer_fee_bps: %w", convErr)
-				}
-				cfg.Market.TransferFeeBps = v
-			case "handling_fee_bps":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.handling_fee_bps: %w", convErr)
-				}
-				cfg.Market.HandlingFeeBps = v
-			case "commission_bps":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.commission_bps: %w", convErr)
-				}
-				cfg.Market.CommissionBps = v
-			case "ipo_uncapped_trading_days":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid market.ipo_uncapped_trading_days: %w", convErr)
-				}
-				cfg.Market.IPOUncappedTradingDays = v
-			}
-		case "strategy":
-			switch key {
-			case "name":
-				cfg.Strategy.Name = value
-			case "symbol":
-				cfg.Strategy.Symbol = value
-			case "data_path":
-				cfg.Strategy.DataPath = value
-			case "data_source":
-				cfg.Strategy.DataSource = value
-			case "api_key_env":
-				cfg.Strategy.APIKeyEnv = value
-			case "short_window":
-				window, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid strategy.short_window: %w", convErr)
-				}
-				cfg.Strategy.ShortWindow = window
-			case "long_window":
-				window, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid strategy.long_window: %w", convErr)
-				}
-				cfg.Strategy.LongWindow = window
-			}
-		case "risk":
-			switch key {
-			case "max_position":
-				size, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid risk.max_position: %w", convErr)
-				}
-				cfg.Risk.MaxPosition = size
-			case "stop_loss_pct":
-				pct, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid risk.stop_loss_pct: %w", convErr)
-				}
-				cfg.Risk.StopLossPct = pct
-			case "skip_repeat_signal":
-				flag, convErr := strconv.ParseBool(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid risk.skip_repeat_signal: %w", convErr)
-				}
-				cfg.Risk.SkipRepeatSignal = flag
-			}
-		case "portfolio":
-			switch key {
-			case "rebalance_interval_days":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.rebalance_interval_days: %w", convErr)
-				}
-				cfg.Portfolio.RebalanceIntervalDays = v
-			case "weight_drift_threshold":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.weight_drift_threshold: %w", convErr)
-				}
-				cfg.Portfolio.WeightDriftThreshold = v
-			case "min_holdings":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.min_holdings: %w", convErr)
-				}
-				cfg.Portfolio.MinHoldings = v
-			case "max_position_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.max_position_weight: %w", convErr)
-				}
-				cfg.Portfolio.MaxPositionWeight = v
-			case "max_cash_share":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.max_cash_share: %w", convErr)
-				}
-				cfg.Portfolio.MaxCashShare = v
-			case "max_volatility":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.max_volatility: %w", convErr)
-				}
-				cfg.Portfolio.MaxVolatility = v
-			case "min_average_turnover":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.min_average_turnover: %w", convErr)
-				}
-				cfg.Portfolio.MinAverageTurnover = v
-			case "overheat_threshold":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.overheat_threshold: %w", convErr)
-				}
-				cfg.Portfolio.OverheatThreshold = v
-			case "max_holding_drawdown":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.max_holding_drawdown: %w", convErr)
-				}
-				cfg.Portfolio.MaxHoldingDrawdown = v
-			case "min_trend_gap":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.min_trend_gap: %w", convErr)
-				}
-				cfg.Portfolio.MinTrendGap = v
-			case "stop_cooldown_days":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.stop_cooldown_days: %w", convErr)
-				}
-				cfg.Portfolio.StopCooldownDays = v
-			case "exit_cooldown_days":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.exit_cooldown_days: %w", convErr)
-				}
-				cfg.Portfolio.ExitCooldownDays = v
-			case "trend_break_cooldown_days":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.trend_break_cooldown_days: %w", convErr)
-				}
-				cfg.Portfolio.TrendBreakCooldownDays = v
-			case "momentum_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.momentum_weight: %w", convErr)
-				}
-				cfg.Portfolio.MomentumWeight = v
-			case "persistence_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.persistence_weight: %w", convErr)
-				}
-				cfg.Portfolio.PersistenceWeight = v
-			case "backtest_excess_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.backtest_excess_weight: %w", convErr)
-				}
-				cfg.Portfolio.BacktestExcessWeight = v
-			case "backtest_return_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.backtest_return_weight: %w", convErr)
-				}
-				cfg.Portfolio.BacktestReturnWeight = v
-			case "backtest_drawdown_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.backtest_drawdown_weight: %w", convErr)
-				}
-				cfg.Portfolio.BacktestDrawdownWeight = v
-			case "watch_penalty":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.watch_penalty: %w", convErr)
-				}
-				cfg.Portfolio.WatchPenalty = v
-			case "trend_strategy_enabled":
-				v, convErr := strconv.ParseBool(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.trend_strategy_enabled: %w", convErr)
-				}
-				cfg.Portfolio.TrendStrategyEnabled = v
-			case "breakout_enabled":
-				v, convErr := strconv.ParseBool(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.breakout_enabled: %w", convErr)
-				}
-				cfg.Portfolio.BreakoutEnabled = v
-			case "pullback_enabled":
-				v, convErr := strconv.ParseBool(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.pullback_enabled: %w", convErr)
-				}
-				cfg.Portfolio.PullbackEnabled = v
-			case "trend_strategy_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.trend_strategy_weight: %w", convErr)
-				}
-				cfg.Portfolio.TrendStrategyWeight = v
-			case "breakout_strategy_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.breakout_strategy_weight: %w", convErr)
-				}
-				cfg.Portfolio.BreakoutStrategyWeight = v
-			case "pullback_strategy_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.pullback_strategy_weight: %w", convErr)
-				}
-				cfg.Portfolio.PullbackStrategyWeight = v
-			case "min_price":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.min_price: %w", convErr)
-				}
-				cfg.Portfolio.MinPrice = v
-			case "min_backtest_excess":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.min_backtest_excess: %w", convErr)
-				}
-				cfg.Portfolio.MinBacktestExcess = v
-			case "max_backtest_drawdown":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.max_backtest_drawdown: %w", convErr)
-				}
-				cfg.Portfolio.MaxBacktestDrawdown = v
-			case "limit_move_threshold":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.limit_move_threshold: %w", convErr)
-				}
-				cfg.Portfolio.LimitMoveThreshold = v
-			case "quality_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.quality_weight: %w", convErr)
-				}
-				cfg.Portfolio.QualityWeight = v
-			case "risk_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.risk_weight: %w", convErr)
-				}
-				cfg.Portfolio.RiskWeight = v
-			case "heat_penalty_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.heat_penalty_weight: %w", convErr)
-				}
-				cfg.Portfolio.HeatPenaltyWeight = v
-			case "reversal_weight":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.reversal_weight: %w", convErr)
-				}
-				cfg.Portfolio.ReversalWeight = v
-			case "industry_max_positions":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.industry_max_positions: %w", convErr)
-				}
-				cfg.Portfolio.IndustryMaxPositions = v
-			case "volatility_target":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.volatility_target: %w", convErr)
-				}
-				cfg.Portfolio.VolatilityTarget = v
-			case "capacity_turnover_share":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.capacity_turnover_share: %w", convErr)
-				}
-				cfg.Portfolio.CapacityTurnoverShare = v
-			case "gap_open_threshold":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.gap_open_threshold: %w", convErr)
-				}
-				cfg.Portfolio.GapOpenThreshold = v
-			case "reserve_candidates":
-				v, convErr := strconv.Atoi(value)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid portfolio.reserve_candidates: %w", convErr)
-				}
-				cfg.Portfolio.ReserveCandidates = v
-			}
-		case "regime":
-			switch key {
-			case "cautious_exposure":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid regime.cautious_exposure: %w", convErr)
-				}
-				cfg.Regime.CautiousExposure = v
-			case "risk_off_exposure":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid regime.risk_off_exposure: %w", convErr)
-				}
-				cfg.Regime.RiskOffExposure = v
-			case "risk_off_drawdown":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid regime.risk_off_drawdown: %w", convErr)
-				}
-				cfg.Regime.RiskOffDrawdown = v
-			case "cautious_drawdown":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid regime.cautious_drawdown: %w", convErr)
-				}
-				cfg.Regime.CautiousDrawdown = v
-			case "breadth_risk_off":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid regime.breadth_risk_off: %w", convErr)
-				}
-				cfg.Regime.BreadthRiskOff = v
-			case "breadth_cautious":
-				v, convErr := strconv.ParseFloat(value, 64)
-				if convErr != nil {
-					return config{}, fmt.Errorf("invalid regime.breadth_cautious: %w", convErr)
-				}
-				cfg.Regime.BreadthCautious = v
-			}
-		}
-	}
-
-	if cfg.AppName == "" {
-		cfg.AppName = "quant-mvp"
-	}
-	if cfg.DB.Path == "" {
-		cfg.DB.Path = "data/quant.db"
-	}
-	if cfg.Schedule.DailyRun == "" {
-		return config{}, errors.New("schedule.daily_run is required")
-	}
-	if cfg.Schedule.CacheTTL == "" {
-		cfg.Schedule.CacheTTL = "4h"
-	}
-	if cfg.Model.DefaultLabel == "" {
-		cfg.Model.DefaultLabel = "label_10d"
-	}
-	if cfg.Model.ModelPath == "" {
-		cfg.Model.ModelPath = filepath.Join(reportsDir, "linear_model.json")
-	}
-	if cfg.Model.BenchmarkModelPath == "" {
-		cfg.Model.BenchmarkModelPath = filepath.Join(reportsDir, "benchmark_classifier.json")
-	}
-	if cfg.Model.PromotionMetric == "" {
-		cfg.Model.PromotionMetric = "rolling_directional_accuracy"
-	}
-	if cfg.Model.MinShadowObservations <= 0 {
-		cfg.Model.MinShadowObservations = 1
-	}
-	if strings.TrimSpace(cfg.Model.ShadowVersion) == "" {
-		cfg.Model.ShadowVersion = "candidate_auto_v1"
-	}
-	if cfg.Market.MainBoardLimit <= 0 {
-		cfg.Market.MainBoardLimit = 0.10
-	}
-	if cfg.Market.ChiNextLimit <= 0 {
-		cfg.Market.ChiNextLimit = 0.20
-	}
-	if cfg.Market.STARLimit <= 0 {
-		cfg.Market.STARLimit = 0.20
-	}
-	if cfg.Market.RiskWarningLimit <= 0 {
-		cfg.Market.RiskWarningLimit = 0.05
-	}
-	if cfg.Market.StampDutySellBps <= 0 {
-		cfg.Market.StampDutySellBps = 5.0
-	}
-	if cfg.Market.TransferFeeBps <= 0 {
-		cfg.Market.TransferFeeBps = 0.1
-	}
-	if cfg.Market.HandlingFeeBps <= 0 {
-		cfg.Market.HandlingFeeBps = 0.341
-	}
-	if cfg.Market.CommissionBps <= 0 {
-		cfg.Market.CommissionBps = 3.0
-	}
-	if cfg.Market.IPOUncappedTradingDays <= 0 {
-		cfg.Market.IPOUncappedTradingDays = 5
-	}
-	if cfg.Report.HistoryRoot == "" {
-		cfg.Report.HistoryRoot = filepath.Join(reportsDir, "history")
-	}
-	if cfg.Report.ExperimentLedger == "" {
-		cfg.Report.ExperimentLedger = filepath.Join(reportsDir, "experiments")
-	}
-	if cfg.Report.RunIndexPath == "" {
-		cfg.Report.RunIndexPath = filepath.Join(reportsDir, "run_index.jsonl")
-	}
-	if cfg.Report.CleanupKeepDays <= 0 {
-		cfg.Report.CleanupKeepDays = 45
-	}
-	if cfg.Strategy.Name == "" {
-		cfg.Strategy.Name = "sma-crossover"
-	}
-	if cfg.Strategy.Symbol == "" {
-		cfg.Strategy.Symbol = "DEMO"
-	}
-	if cfg.Strategy.DataPath == "" {
-		cfg.Strategy.DataPath = "data/market_data.csv"
-	}
-	if cfg.Strategy.DataSource == "" {
-		cfg.Strategy.DataSource = "auto"
-	}
-	if cfg.Strategy.APIKeyEnv == "" {
-		cfg.Strategy.APIKeyEnv = "ALPHAVANTAGE_API_KEY"
-	}
-	if cfg.Strategy.ShortWindow == 0 {
-		cfg.Strategy.ShortWindow = 3
-	}
-	if cfg.Strategy.LongWindow == 0 {
-		cfg.Strategy.LongWindow = 5
-	}
-	if cfg.Strategy.ShortWindow >= cfg.Strategy.LongWindow {
-		return config{}, errors.New("strategy.short_window must be smaller than strategy.long_window")
-	}
-	if cfg.Risk.MaxPosition <= 0 {
-		cfg.Risk.MaxPosition = 1
-	}
-	if cfg.Risk.StopLossPct <= 0 {
-		cfg.Risk.StopLossPct = 0.03
-	}
-	if cfg.Portfolio.RebalanceIntervalDays <= 0 {
-		cfg.Portfolio.RebalanceIntervalDays = 5
-	}
-	if cfg.Portfolio.WeightDriftThreshold <= 0 {
-		cfg.Portfolio.WeightDriftThreshold = 0.20
-	}
-	if cfg.Portfolio.MinHoldings <= 0 {
-		cfg.Portfolio.MinHoldings = 2
-	}
-	if cfg.Portfolio.MaxPositionWeight <= 0 {
-		cfg.Portfolio.MaxPositionWeight = 0.45
-	}
-	if cfg.Portfolio.MaxCashShare < 0 {
-		cfg.Portfolio.MaxCashShare = 0.20
-	}
-	if cfg.Portfolio.MaxVolatility <= 0 {
-		cfg.Portfolio.MaxVolatility = 0.18
-	}
-	if cfg.Portfolio.MinAverageTurnover <= 0 {
-		cfg.Portfolio.MinAverageTurnover = 30_000_000
-	}
-	if cfg.Portfolio.OverheatThreshold <= 0 {
-		cfg.Portfolio.OverheatThreshold = 0.12
-	}
-	if cfg.Portfolio.MaxHoldingDrawdown <= 0 {
-		cfg.Portfolio.MaxHoldingDrawdown = 0.15
-	}
-	if cfg.Portfolio.MinTrendGap <= 0 {
-		cfg.Portfolio.MinTrendGap = 0.02
-	}
-	if cfg.Portfolio.StopCooldownDays <= 0 {
-		cfg.Portfolio.StopCooldownDays = 5
-	}
-	if cfg.Portfolio.ExitCooldownDays <= 0 {
-		cfg.Portfolio.ExitCooldownDays = 3
-	}
-	if cfg.Portfolio.TrendBreakCooldownDays <= 0 {
-		cfg.Portfolio.TrendBreakCooldownDays = 4
-	}
-	if cfg.Portfolio.MomentumWeight == 0 {
-		cfg.Portfolio.MomentumWeight = 0.60
-	}
-	if cfg.Portfolio.PersistenceWeight == 0 {
-		cfg.Portfolio.PersistenceWeight = 0.60
-	}
-	if cfg.Portfolio.BacktestExcessWeight == 0 {
-		cfg.Portfolio.BacktestExcessWeight = 0.35
-	}
-	if cfg.Portfolio.BacktestReturnWeight == 0 {
-		cfg.Portfolio.BacktestReturnWeight = 0.15
-	}
-	if cfg.Portfolio.BacktestDrawdownWeight == 0 {
-		cfg.Portfolio.BacktestDrawdownWeight = 0.20
-	}
-	if cfg.Portfolio.WatchPenalty == 0 {
-		cfg.Portfolio.WatchPenalty = 0.02
-	}
-	if !cfg.Portfolio.TrendStrategyEnabled && !cfg.Portfolio.BreakoutEnabled && !cfg.Portfolio.PullbackEnabled {
-		cfg.Portfolio.TrendStrategyEnabled = true
-		cfg.Portfolio.BreakoutEnabled = true
-		cfg.Portfolio.PullbackEnabled = true
-	}
-	if cfg.Portfolio.TrendStrategyWeight == 0 {
-		cfg.Portfolio.TrendStrategyWeight = 1.0
-	}
-	if cfg.Portfolio.BreakoutStrategyWeight == 0 {
-		cfg.Portfolio.BreakoutStrategyWeight = 1.0
-	}
-	if cfg.Portfolio.PullbackStrategyWeight == 0 {
-		cfg.Portfolio.PullbackStrategyWeight = 1.0
-	}
-	if cfg.Portfolio.MinPrice <= 0 {
-		cfg.Portfolio.MinPrice = 3.0
-	}
-	if cfg.Portfolio.MaxBacktestDrawdown <= 0 {
-		cfg.Portfolio.MaxBacktestDrawdown = 0.25
-	}
-	if cfg.Portfolio.LimitMoveThreshold <= 0 {
-		cfg.Portfolio.LimitMoveThreshold = 0.095
-	}
-	if cfg.Portfolio.QualityWeight == 0 {
-		cfg.Portfolio.QualityWeight = 1.10
-	}
-	if cfg.Portfolio.RiskWeight == 0 {
-		cfg.Portfolio.RiskWeight = 0.80
-	}
-	if cfg.Portfolio.HeatPenaltyWeight == 0 {
-		cfg.Portfolio.HeatPenaltyWeight = 1.10
-	}
-	if cfg.Portfolio.ReversalWeight == 0 {
-		cfg.Portfolio.ReversalWeight = 0.90
-	}
-	if cfg.Portfolio.IndustryMaxPositions <= 0 {
-		cfg.Portfolio.IndustryMaxPositions = 1
-	}
-	if cfg.Portfolio.VolatilityTarget <= 0 {
-		cfg.Portfolio.VolatilityTarget = 0.18
-	}
-	if cfg.Portfolio.CapacityTurnoverShare <= 0 {
-		cfg.Portfolio.CapacityTurnoverShare = 0.08
-	}
-	if cfg.Portfolio.GapOpenThreshold <= 0 {
-		cfg.Portfolio.GapOpenThreshold = 0.04
-	}
-	if cfg.Portfolio.ReserveCandidates <= 0 {
-		cfg.Portfolio.ReserveCandidates = 2
-	}
-	if cfg.Regime.CautiousExposure <= 0 {
-		cfg.Regime.CautiousExposure = 0.45
-	}
-	if cfg.Regime.RiskOffExposure < 0 {
-		cfg.Regime.RiskOffExposure = 0
-	}
-	if cfg.Regime.RiskOffDrawdown <= 0 {
-		cfg.Regime.RiskOffDrawdown = 0.12
-	}
-	if cfg.Regime.CautiousDrawdown <= 0 {
-		cfg.Regime.CautiousDrawdown = 0.06
-	}
-	if cfg.Regime.BreadthRiskOff <= 0 {
-		cfg.Regime.BreadthRiskOff = 0.25
-	}
-	if cfg.Regime.BreadthCautious <= 0 {
-		cfg.Regime.BreadthCautious = 0.45
-	}
-
-	return cfg, nil
+	return appconfig.Load(path)
 }
 
 func ensureSQLiteDB(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	if _, err := os.Stat(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	return execSQLite(path, `
-CREATE TABLE IF NOT EXISTS execution_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    strategy_name TEXT NOT NULL,
-    status TEXT NOT NULL,
-    note TEXT NOT NULL,
-    executed_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS signal_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    strategy_name TEXT NOT NULL,
-    symbol TEXT NOT NULL,
-    signal TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    short_ma REAL NOT NULL,
-    long_ma REAL NOT NULL,
-    open_price REAL NOT NULL,
-    high_price REAL NOT NULL,
-    low_price REAL NOT NULL,
-    close_price REAL NOT NULL,
-    volume REAL NOT NULL,
-    position_size INTEGER NOT NULL,
-    decided_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS position_state (
-    symbol TEXT PRIMARY KEY,
-    side TEXT NOT NULL,
-    quantity INTEGER NOT NULL,
-    entry_price REAL NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS run_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_type TEXT NOT NULL,
-    git_commit TEXT NOT NULL,
-    generated_at TEXT NOT NULL,
-    history_dir TEXT NOT NULL,
-    summary_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS experiment_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    experiment_type TEXT NOT NULL,
-    git_commit TEXT NOT NULL,
-    recorded_at TEXT NOT NULL,
-    config_json TEXT NOT NULL,
-    metrics_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dashboard_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    generated_at TEXT NOT NULL,
-    summary_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS simulated_account_ledger (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot_date TEXT NOT NULL,
-    market TEXT NOT NULL,
-    regime TEXT NOT NULL,
-    exposure REAL NOT NULL,
-    equity REAL NOT NULL,
-    cash REAL NOT NULL,
-    holdings_json TEXT NOT NULL,
-    note TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS paper_accounts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    market TEXT NOT NULL,
-    mode TEXT NOT NULL,
-    status TEXT NOT NULL,
-    active_strategy TEXT NOT NULL,
-    cash REAL NOT NULL,
-    equity REAL NOT NULL,
-    last_market_date TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    note TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS paper_positions (
-    account_id INTEGER NOT NULL,
-    symbol TEXT NOT NULL,
-    name TEXT NOT NULL,
-    shares INTEGER NOT NULL,
-    entry_price REAL NOT NULL,
-    entry_date TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY(account_id, symbol)
-);
-
-CREATE TABLE IF NOT EXISTS paper_orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id INTEGER NOT NULL,
-    symbol TEXT NOT NULL,
-    name TEXT NOT NULL,
-    side TEXT NOT NULL,
-    order_type TEXT NOT NULL,
-    quantity INTEGER NOT NULL,
-    order_price REAL NOT NULL,
-    status TEXT NOT NULL,
-    placed_at TEXT NOT NULL,
-    note TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS paper_fills (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id INTEGER,
-    account_id INTEGER NOT NULL,
-    symbol TEXT NOT NULL,
-    name TEXT NOT NULL,
-    side TEXT NOT NULL,
-    quantity INTEGER NOT NULL,
-    fill_price REAL NOT NULL,
-    fee REAL NOT NULL,
-    filled_at TEXT NOT NULL,
-    note TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS paper_equity_curve (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id INTEGER NOT NULL,
-    snapshot_time TEXT NOT NULL,
-    market_date TEXT NOT NULL,
-    market TEXT NOT NULL,
-    equity REAL NOT NULL,
-    cash REAL NOT NULL,
-    holdings_json TEXT NOT NULL,
-    note TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS strategy_registry (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    market TEXT NOT NULL,
-    version_name TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,
-    parent_version TEXT NOT NULL,
-    git_commit TEXT NOT NULL,
-    config_json TEXT NOT NULL,
-    model_path TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    activated_at TEXT NOT NULL,
-    archived_at TEXT NOT NULL,
-    notes TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS strategy_promotions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_type TEXT NOT NULL,
-    market TEXT NOT NULL,
-    from_version TEXT NOT NULL,
-    to_version TEXT NOT NULL,
-    trigger_reason TEXT NOT NULL,
-    metrics_json TEXT NOT NULL,
-    recorded_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS paper_daily_metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id INTEGER NOT NULL,
-    strategy_version TEXT NOT NULL,
-    mode TEXT NOT NULL,
-    market TEXT NOT NULL,
-    market_date TEXT NOT NULL,
-    equity REAL NOT NULL,
-    cash REAL NOT NULL,
-    holding_count INTEGER NOT NULL,
-    order_count INTEGER NOT NULL,
-    fill_count INTEGER NOT NULL,
-    session TEXT NOT NULL,
-    recorded_at TEXT NOT NULL,
-    note TEXT NOT NULL
-);`)
+	return dbstore.EnsureSQLiteDB(path)
 }
 
 func runStrategy(path string, strategy strategyConfig, risk riskConfig) error {
@@ -7046,6 +5780,12 @@ type aShareSymbol struct {
 	Industry string
 }
 
+type loadedAShareSeries struct {
+	meta       aShareSymbol
+	bars       []marketBar
+	dataSource string
+}
+
 func extractEastmoneyBars(body []byte) ([]marketBar, error) {
 	var response eastmoneyKlineResponse
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -7139,6 +5879,84 @@ func loadAShareUniverse() ([]aShareSymbol, error) {
 		})
 	}
 	return symbols, nil
+}
+
+func symbolLoadWorkerCount() int {
+	if value := strings.TrimSpace(os.Getenv("SYMBOL_LOAD_WORKERS")); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	workers := runtime.NumCPU()
+	if workers < 4 {
+		workers = 4
+	}
+	if workers > 12 {
+		workers = 12
+	}
+	return workers
+}
+
+func loadAShareSeries(symbols []aShareSymbol, minBars int) []loadedAShareSeries {
+	type result struct {
+		index int
+		item  loadedAShareSeries
+	}
+
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	jobs := make(chan int)
+	results := make(chan result, len(symbols))
+	var wg sync.WaitGroup
+	workerCount := min(symbolLoadWorkerCount(), len(symbols))
+	if workerCount <= 0 {
+		workerCount = 1
+	}
+
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				symbol := symbols[idx]
+				bars, dataSource, _, err := loadSymbolBars(symbol.Symbol, "auto", "", "ALPHAVANTAGE_API_KEY", false)
+				if err != nil || len(bars) < minBars {
+					continue
+				}
+				results <- result{
+					index: idx,
+					item: loadedAShareSeries{
+						meta:       symbol,
+						bars:       bars,
+						dataSource: dataSource,
+					},
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for idx := range symbols {
+			jobs <- idx
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
+
+	collected := make([]result, 0, len(symbols))
+	for item := range results {
+		collected = append(collected, item)
+	}
+	sort.Slice(collected, func(i, j int) bool { return collected[i].index < collected[j].index })
+
+	series := make([]loadedAShareSeries, 0, len(collected))
+	for _, item := range collected {
+		series = append(series, item.item)
+	}
+	return series
 }
 
 func loadFundamentalSnapshots() map[string]fundamentalSnapshot {
@@ -8188,12 +7006,7 @@ func loadLastSignal(dbPath string, symbol string) (string, error) {
 }
 
 func runSQLiteQuery(path string, sql string) (string, error) {
-	cmd := exec.Command("sqlite3", "-noheader", path, sql)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return string(output), nil
+	return dbstore.QueryString(path, sql)
 }
 
 func ensurePaperAccount(dbPath string, market string, mode string, initialCash float64, strategyName string) (int, float64, string, string, string, string, error) {
@@ -8361,7 +7174,7 @@ func savePaperAccountState(dbPath string, accountID int, market string, mode str
 		quoteSQL(now.Format(time.RFC3339)),
 		quoteSQL(note),
 	))
-	return execSQLite(dbPath, strings.Join(statements, "\n"))
+	return execSQLiteTx(dbPath, statements...)
 }
 
 func printPaperTradingSummary(result paperAccountResult) {
@@ -8376,12 +7189,11 @@ func printPaperTradingSummary(result paperAccountResult) {
 }
 
 func execSQLite(path string, sql string) error {
-	cmd := exec.Command("sqlite3", path, sql)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
+	return dbstore.Exec(path, sql)
+}
+
+func execSQLiteTx(path string, statements ...string) error {
+	return dbstore.ExecTx(path, statements...)
 }
 
 func quoteSQL(value string) string {

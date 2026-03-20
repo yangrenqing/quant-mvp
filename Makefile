@@ -4,7 +4,7 @@ FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
 
-.PHONY: help scan portfolio dataset model daily
+.PHONY: help scan portfolio dataset model daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
@@ -12,6 +12,7 @@ help:
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
 	@echo "make daily      # run the full daily workflow"
+	@echo "make verify     # run Go tests, script smoke checks, and config validation"
 
 scan:
 	PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --scan-a-share --top $(TOP)
@@ -27,3 +28,12 @@ model:
 
 daily:
 	bash scripts/daily_run.sh
+
+verify:
+	PATH=/usr/local/go/bin:$$PATH $(GO) test ./...
+	bash -n scripts/daily_run.sh
+	bash -n scripts/weekly_run.sh
+	bash -n scripts/intraday_run.sh
+	bash -n scripts/research_run.sh
+	$(PYTHON) -m py_compile scripts/*.py
+	PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
