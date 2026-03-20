@@ -180,14 +180,14 @@ show-output-paths:
 	print_paths "broad overview pages: deeper review (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview JSON companions: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
 	print_paths "broad overview JSON companions: deeper review:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow latest outputs: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
-	print_paths "workflow latest machine-readable: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
-	print_paths "workflow latest outputs: deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
-	print_paths "workflow latest machine-readable: deeper review:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow summary views: quick monitoring:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
-	print_paths "workflow summary views: deeper review:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
-	print_paths "workflow structured data/model files: quick monitoring:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
-	print_paths "workflow structured data/model files: deeper review:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
+	print_paths "workflow latest: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "workflow machine-readable: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
+	print_paths "workflow latest: deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "workflow machine-readable: deeper review:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
+	print_paths "workflow summaries: quick monitoring:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
+	print_paths "workflow summaries: deeper review:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
+	print_paths "workflow structured: quick monitoring:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
+	print_paths "workflow structured: deeper review:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
 	print_paths "workflow archive: quick monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
 	print_paths "workflow archive machine-readable: quick monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
 	print_paths "workflow archive: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
