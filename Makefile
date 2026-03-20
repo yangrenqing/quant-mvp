@@ -110,6 +110,8 @@ MODEL_LATEST_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_ADDITIONAL_SU
 MODEL_HUMAN_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_ADDITIONAL_SUMMARY_OUTPUT_PATHS)
 MODEL_MACHINE_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
 MODEL_HISTORY_OUTPUT_PATHS ?= $(MODEL_VERSIONS_DIR)
+WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS ?= $(SCAN_RECOMMENDED_OUTPUT_PATH) $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH)
+WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS ?= $(DATASET_RECOMMENDED_OUTPUT_PATH) $(MODEL_RECOMMENDED_OUTPUT_PATH)
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
@@ -159,7 +161,7 @@ show-output-paths:
 	}; \
 	echo "note: show-output-paths starts with the best high-level overview pair, then the broad-overview start-here pairs for live status, market context, retrospective analysis, and research wrap-up, before the broader overview set for cross-workflow status/context; $(OVERVIEW_ENTRY_USE_NOTE)"; \
 	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
-	echo "note: in each workflow-specific section, start with 'open this first'; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; the next line gives the closest machine-readable companion; use the summary views and structured data/model files lists for deeper follow-up or automation, and history/archive paths for archived runs."; \
+	echo "note: the workflow-specific area starts with a compact grouped latest-output view; scan and portfolio latest paths are for quick operational monitoring, while dataset and model latest paths are for deeper review; in each workflow-specific section, start with 'open this first'; the next line gives the closest machine-readable companion; use the summary views and structured data/model files lists for deeper follow-up or automation, and history/archive paths for archived runs."; \
 	print_paths "high-level overview start here (HTML + JSON):" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "broad overview start here during the trading day (live status, HTML + JSON):" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "broad overview start here for market context (HTML + JSON):" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
@@ -170,6 +172,8 @@ show-output-paths:
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
 	print_paths "broad overview deeper narrative/review JSON companions:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
+	print_paths "workflow-specific latest outputs for quick operational monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "workflow-specific latest outputs for deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
 	print_paths "scan open this first for quick monitoring/post-run checks:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan latest machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
