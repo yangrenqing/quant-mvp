@@ -73,7 +73,7 @@ bash scripts/daily_run.sh --skip-factor
 bash scripts/daily_run.sh --scan-only
 ```
 
-Or with `make`:
+Make workflow:
 ```bash
 cd /Users/yangrenqing/Downloads/quant-mvp
 make help
@@ -82,13 +82,16 @@ make portfolio
 make dataset
 make model
 make validate-config
+make quick-check
 make verify
 make daily
 ```
 
 `make validate-config` runs only layered runtime config validation.
 
-`make verify` is the broader local preflight: it runs Go tests, shell syntax checks, Python bytecode compilation, and then `make validate-config`.
+`make quick-check` is the fast local preflight: it runs shell syntax checks, Python bytecode compilation, and then `make validate-config`.
+
+`make verify` is the broader local preflight: it runs Go tests and then `make quick-check`.
 
 Go-based `make` targets default `GOCACHE` to the repo-local `.cache/go-build`. Override `GOCACHE` explicitly if you want a different cache path.
 

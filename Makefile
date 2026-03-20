@@ -1,13 +1,14 @@
 GO ?= /usr/local/go/bin/go
 GOCACHE ?= $(CURDIR)/.cache/go-build
 PYTHON ?= python3
+PYTHONPYCACHEPREFIX ?= $(CURDIR)/.cache/python
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
 
-export GOCACHE
+export GOCACHE PYTHONPYCACHEPREFIX
 
-.PHONY: help scan portfolio dataset model validate-config daily verify
+.PHONY: help scan portfolio dataset model validate-config quick-check daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
@@ -15,8 +16,9 @@ help:
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
 	@echo "make validate-config # only validate layered runtime config"
+	@echo "make quick-check # fast local checks: shell syntax, py_compile, and validate-config"
 	@echo "make daily      # run the full daily workflow"
-	@echo "make verify     # broader local preflight: Go tests, script smoke checks, py_compile, and validate-config"
+	@echo "make verify     # broader local preflight: Go tests plus make quick-check"
 	@echo "Go-based make targets use GOCACHE=$(GOCACHE) unless GOCACHE is overridden"
 
 scan:
@@ -36,18 +38,22 @@ validate-config:
 	@PATH=/usr/local/go/bin:$$PATH $(GO) run ./cmd/scheduler --validate-config >/dev/null
 	@echo "config validation: ok"
 
+quick-check:
+	@echo "==> quick-check: shell syntax"
+	@bash -n scripts/daily_run.sh
+	@bash -n scripts/weekly_run.sh
+	@bash -n scripts/intraday_run.sh
+	@bash -n scripts/research_run.sh
+	@echo "==> quick-check: Python bytecode"
+	@$(PYTHON) -m py_compile scripts/*.py
+	@echo "==> quick-check: layered runtime config"
+	@$(MAKE) --no-print-directory validate-config
+
 daily:
 	bash scripts/daily_run.sh
 
 verify:
 	@echo "==> verify: Go tests"
 	@PATH=/usr/local/go/bin:$$PATH $(GO) test ./...
-	@echo "==> verify: shell syntax"
-	@bash -n scripts/daily_run.sh
-	@bash -n scripts/weekly_run.sh
-	@bash -n scripts/intraday_run.sh
-	@bash -n scripts/research_run.sh
-	@echo "==> verify: Python bytecode"
-	@$(PYTHON) -m py_compile scripts/*.py
-	@echo "==> verify: layered runtime config"
-	@$(MAKE) --no-print-directory validate-config
+	@echo "==> verify: fast local checks"
+	@$(MAKE) --no-print-directory quick-check
