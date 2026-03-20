@@ -176,22 +176,22 @@ show-output-paths:
 	print_paths "start: market context:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
 	print_paths "start: after close:" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
 	print_paths "start: research wrap-up:" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
-	print_paths "overview pages: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_PATHS); \
-	print_paths "overview pages: deeper review:" $(REPORT_OVERVIEW_REVIEW_PATHS); \
-	print_paths "overview JSON: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
-	print_paths "overview JSON: deeper review:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "latest: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
-	print_paths "machine-readable: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
-	print_paths "latest: deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
-	print_paths "machine-readable: deeper review:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
-	print_paths "summaries: quick monitoring:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
-	print_paths "summaries: deeper review:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
-	print_paths "structured: quick monitoring:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
-	print_paths "structured: deeper review:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
-	print_paths "archive: quick monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
-	print_paths "archive machine: quick monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
-	print_paths "archive: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
-	print_paths "archive machine: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
+	print_paths "overview pages: monitoring:" $(REPORT_OVERVIEW_MONITORING_PATHS); \
+	print_paths "overview pages: review:" $(REPORT_OVERVIEW_REVIEW_PATHS); \
+	print_paths "overview JSON: monitoring:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
+	print_paths "overview JSON: review:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
+	print_paths "latest: monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "machine-readable: monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
+	print_paths "latest: review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "machine-readable: review:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
+	print_paths "summaries: monitoring:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
+	print_paths "summaries: review:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
+	print_paths "structured: monitoring:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
+	print_paths "structured: review:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
+	print_paths "archive: monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
+	print_paths "archive machine: monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
+	print_paths "archive: review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
+	print_paths "archive machine: review:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan machine-readable:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summaries:" $(SCAN_HUMAN_OUTPUT_PATHS); \
