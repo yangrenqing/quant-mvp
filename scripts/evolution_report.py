@@ -105,6 +105,15 @@ def main():
         if classifier.get("promoted"):
             classifier_promotions += 1
 
+    if len(promo_rows) == 0 and model_promotions == 0 and classifier_promotions == 0:
+        explanation = "窗口内有自动运行，但没有发生有效策略或模型升级，系统仍以稳定执行为主。"
+    elif promo_counter.get("promotion", 0) > 0 or model_promotions > 0 or classifier_promotions > 0:
+        explanation = "窗口内发生了有效升级，说明自动进化链路不仅在运行，而且确实做出了版本替换。"
+    elif promo_counter.get("rollback", 0) > 0:
+        explanation = "窗口内以风控回滚为主，系统在保护稳定性，而不是主动进攻。"
+    else:
+        explanation = "窗口内主要是观察、评估或 noop 事件，说明系统在比较版本，但暂时没有足够优势触发切换。"
+
     lines = [
         "Evolution Report",
         "",
@@ -137,11 +146,12 @@ def main():
 
     lines.extend(
         [
-            "",
-            f"Model versions built: {len(model_records)}",
-            f"Regression promotions: {model_promotions}",
-            f"Classifier promotions: {classifier_promotions}",
-        ]
+        "",
+        f"Model versions built: {len(model_records)}",
+        f"Regression promotions: {model_promotions}",
+        f"Classifier promotions: {classifier_promotions}",
+        f"Explanation: {explanation}",
+    ]
     )
 
     lines.append("")
@@ -188,6 +198,7 @@ def main():
         "model_versions_built": len(model_records),
         "regression_promotions": model_promotions,
         "classifier_promotions": classifier_promotions,
+        "explanation": explanation,
         "active_latest": dict(active_latest) if active_latest else None,
         "shadow_latest": dict(shadow_latest) if shadow_latest else None,
         "active_shadow_equity_diff": equity_diff,

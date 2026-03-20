@@ -49,6 +49,10 @@ fi
 
 echo "[4/9] refresh factor research"
 "$PYTHON_BIN" scripts/factor_research.py --dataset reports/training_dataset.csv --label "$MODEL_LABEL"
+"$PYTHON_BIN" scripts/factor_diagnostics.py --dataset reports/training_dataset.csv
+"$PYTHON_BIN" scripts/model_comparison.py
+"$PYTHON_BIN" scripts/strategy_quality.py
+"$PYTHON_BIN" scripts/research_summary.py
 
 echo "[5/9] refresh shadow account"
 PATH="/usr/local/go/bin:$PATH" "$GO_BIN" run ./cmd/scheduler --paper-shadow-run --once --shadow-version "$SHADOW_VERSION" --top 3 --cash "$CASH" --fee-bps "$FEE_BPS" --slippage-bps "$SLIPPAGE_BPS"

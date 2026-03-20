@@ -6,6 +6,7 @@ Documentation:
 - `docs/development_guide.md`
 - `docs/user_guide.md`
 - `docs/research_implementation_plan.md`
+- `docs/research_platform_plan.md`
 - `docs/auto_evolution_design.md`
 
 Current behavior:
@@ -103,6 +104,10 @@ Key outputs:
 - `reports/dashboard.html`
 - `reports/health_monitor.html`
 - `reports/factor_research.html`
+- `reports/factor_diagnostics.html`
+- `reports/model_comparison.html`
+- `reports/strategy_quality.html`
+- `reports/research_summary.html`
 - `reports/history_compare.html`
 - `reports/market_overview.html`
 - `reports/history/YYYY-MM-DD/...`
@@ -120,6 +125,10 @@ Health and factor research:
 cd /Users/yangrenqing/Downloads/quant-mvp
 python3 scripts/health_monitor.py
 python3 scripts/factor_research.py --dataset reports/training_dataset.csv --label label_10d
+python3 scripts/factor_diagnostics.py --dataset reports/training_dataset.csv
+python3 scripts/model_comparison.py
+python3 scripts/strategy_quality.py
+python3 scripts/research_summary.py
 ```
 
 Research workspace:

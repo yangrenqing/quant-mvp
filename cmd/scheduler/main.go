@@ -3926,6 +3926,10 @@ func writeDashboardReports() error {
 		title string
 		path  string
 	}{
+		{title: "Research Summary", path: filepath.Join(reportsDir, "research_summary.txt")},
+		{title: "Factor Diagnostics", path: filepath.Join(reportsDir, "factor_diagnostics.txt")},
+		{title: "Model Comparison", path: filepath.Join(reportsDir, "model_comparison.txt")},
+		{title: "Strategy Quality", path: filepath.Join(reportsDir, "strategy_quality.txt")},
 		{title: "Latest Plan", path: filepath.Join(reportsDir, "latest_plan.txt")},
 		{title: "A-Share Focus", path: filepath.Join(reportsDir, "a_share_focus.txt")},
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
@@ -3965,6 +3969,9 @@ func writeDashboardReports() error {
 	lifecycleCard := buildLifecycleSummaryCard()
 	healthCard := buildHealthSummaryCard()
 	factorCard := buildFactorSummaryCard()
+	researchCard := buildResearchSummaryCard()
+	modelCard := buildModelComparisonCard()
+	strategyQualityCard := buildStrategyQualitySummaryCard()
 	evolutionSummaryCard := buildEvolutionSummaryCard()
 	overnightEvolutionCard := buildOvernightEvolutionSummaryCard()
 
@@ -3977,6 +3984,9 @@ func writeDashboardReports() error {
 	textBuilder.WriteString("Current Holdings\n" + holdingCard + "\n\n")
 	textBuilder.WriteString("Strategy Evolution\n" + evolutionCard + "\n\n")
 	textBuilder.WriteString("Lifecycle Summary\n" + lifecycleCard + "\n\n")
+	textBuilder.WriteString("Research Summary\n" + researchCard + "\n\n")
+	textBuilder.WriteString("Model Comparison\n" + modelCard + "\n\n")
+	textBuilder.WriteString("Strategy Quality\n" + strategyQualityCard + "\n\n")
 	textBuilder.WriteString("Evolution Summary\n" + evolutionSummaryCard + "\n\n")
 	textBuilder.WriteString("Overnight Evolution\n" + overnightEvolutionCard + "\n\n")
 	textBuilder.WriteString("System Health\n" + healthCard + "\n\n")
@@ -4001,6 +4011,9 @@ func writeDashboardReports() error {
 		{Title: "Current Holdings", Body: holdingCard},
 		{Title: "Strategy Evolution", Body: evolutionCard},
 		{Title: "Lifecycle Summary", Body: lifecycleCard},
+		{Title: "Research Summary", Body: researchCard},
+		{Title: "Model Comparison", Body: modelCard},
+		{Title: "Strategy Quality", Body: strategyQualityCard},
 		{Title: "Evolution Summary", Body: evolutionSummaryCard},
 		{Title: "Overnight Evolution", Body: overnightEvolutionCard},
 		{Title: "System Health", Body: healthCard},
@@ -4068,6 +4081,9 @@ func writeDashboardReports() error {
 		"current_holdings":    holdingCard,
 		"strategy_evolution":  evolutionCard,
 		"lifecycle_summary":   lifecycleCard,
+		"research_summary":    researchCard,
+		"model_comparison":    modelCard,
+		"strategy_quality":    strategyQualityCard,
 		"evolution_summary":   evolutionSummaryCard,
 		"overnight_evolution": overnightEvolutionCard,
 		"system_health":       healthCard,
@@ -4680,6 +4696,57 @@ func buildFactorSummaryCard() string {
 	return rowLine + " | " + bestLine
 }
 
+func buildResearchSummaryCard() string {
+	report, _ := readDashboardSection(filepath.Join(reportsDir, "research_summary.txt"))
+	summaryLine := firstNonEmptyLine(report)
+	if summaryLine == "" {
+		return "研究摘要尚未生成。"
+	}
+	verdictLine := firstMatchingLine(report, []string{"Verdict:"})
+	if verdictLine == "" || verdictLine == summaryLine {
+		return summaryLine
+	}
+	return summaryLine + " | " + verdictLine
+}
+
+func buildModelComparisonCard() string {
+	report, _ := readDashboardSection(filepath.Join(reportsDir, "model_comparison.txt"))
+	regLine := firstMatchingLine(report, []string{"- test directional accuracy:", "- rolling directional accuracy:"})
+	clsLine := lastMatchingLine(report, []string{"- test directional accuracy:", "- rolling directional accuracy:"})
+	verdictLine := firstMatchingLine(report, []string{"Verdict:"})
+	parts := make([]string, 0, 3)
+	if regLine != "" {
+		parts = append(parts, "reg "+strings.TrimPrefix(regLine, "- "))
+	}
+	if clsLine != "" && clsLine != regLine {
+		parts = append(parts, "cls "+strings.TrimPrefix(clsLine, "- "))
+	}
+	if verdictLine != "" {
+		parts = append(parts, verdictLine)
+	}
+	if len(parts) == 0 {
+		return "模型对比报告尚未生成。"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func buildStrategyQualitySummaryCard() string {
+	report, _ := readDashboardSection(filepath.Join(reportsDir, "strategy_quality.txt"))
+	total := firstMatchingLine(report, []string{"- total return:"})
+	excess := firstMatchingLine(report, []string{"- excess return:"})
+	verdict := firstMatchingLine(report, []string{"Verdict:"})
+	parts := make([]string, 0, 3)
+	for _, item := range []string{total, excess, verdict} {
+		if item != "" {
+			parts = append(parts, item)
+		}
+	}
+	if len(parts) == 0 {
+		return "策略质量报告尚未生成。"
+	}
+	return strings.Join(parts, " | ")
+}
+
 func buildEvolutionSummaryCard() string {
 	report, _ := readDashboardSection(filepath.Join(reportsDir, "evolution_report.txt"))
 	runLine := firstMatchingLine(report, []string{"Run count:", "Lifecycle events:", "Model versions built:"})
@@ -4691,6 +4758,33 @@ func buildEvolutionSummaryCard() string {
 		return runLine
 	}
 	return runLine + " | " + promotionLine
+}
+
+func firstNonEmptyLine(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasSuffix(line, "Summary") || strings.HasSuffix(line, "Quality") || strings.HasSuffix(line, "Diagnostics") || strings.HasSuffix(line, "Comparison") {
+			continue
+		}
+		return line
+	}
+	return ""
+}
+
+func lastMatchingLine(content string, prefixes []string) string {
+	lines := strings.Split(content, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(line, prefix) {
+				return line
+			}
+		}
+	}
+	return ""
 }
 
 func buildOvernightEvolutionSummaryCard() string {
