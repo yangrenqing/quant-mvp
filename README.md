@@ -94,22 +94,24 @@ make daily
 
 `make show-output-paths` prints the current generated report/artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
 
-The broad overview area splits into quick monitoring (`reports/dashboard.html`, `reports/market_overview.html`) and deeper review (`reports/history_compare.html`, `reports/research_summary.html`). Use the overview section like this:
+The broad overview area splits into quick monitoring (`reports/dashboard.html`, `reports/market_overview.html`) and deeper review (`reports/history_compare.html`, `reports/research_summary.html`).
+
+Overview legend:
 - `start: ...` → first stop for the given intent
 - `overview pages` → quick human scan
 - `overview JSON` → automation view in the same order
 
-Start-here pairs:
+Start here:
 - trading day → `reports/dashboard.html` + `reports/dashboard.json`
 - market context → `reports/market_overview.html` + `reports/market_overview.json`
 - after the close → `reports/history_compare.html` + `reports/history_compare.json`
 - research wrap-up → `reports/research_summary.html` + `reports/research_summary.json`
 
-Before the detailed per-workflow sections, the helper shows grouped quick-monitoring versus deeper-review blocks for `latest`, `machine`, `summaries`, `structured`, and `archive` views.
+Before the detailed per-workflow sections, the helper shows grouped `latest`, `machine`, `summaries`, `structured`, and `archive` blocks split into quick monitoring vs deeper review.
 
 Per-workflow line order: `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
-Use the workflow-specific sections like this:
+Workflow legend:
 - `open this first` → live monitoring or immediate post-run check
 - `machine` → closest structured companion
 - `summaries` / `structured files` → deeper review or automation
