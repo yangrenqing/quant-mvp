@@ -666,7 +666,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.Portfolio.MaxPositionWeight <= 0 {
 		cfg.Portfolio.MaxPositionWeight = 0.45
 	}
-	if cfg.Portfolio.MaxCashShare < 0 {
+	if cfg.Portfolio.MaxCashShare <= 0 {
 		cfg.Portfolio.MaxCashShare = 0.20
 	}
 	if cfg.Portfolio.MaxVolatility <= 0 {
