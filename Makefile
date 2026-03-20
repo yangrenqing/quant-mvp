@@ -19,18 +19,21 @@ VERIFY_FOLLOW_UP ?= console output from $(VERIFY_STEPS)
 SCAN_REPORT_TEXT ?= $(CURDIR)/reports/a_share_scan.txt
 SCAN_REPORT_HTML ?= $(CURDIR)/reports/a_share_scan.html
 SCAN_REPORT_JSON ?= $(CURDIR)/reports/a_share_scan.json
+SCAN_RECOMMENDED_OUTPUT_PATH ?= $(SCAN_REPORT_HTML)
 SCAN_PRIMARY_OUTPUT_PATHS ?= $(SCAN_REPORT_TEXT)
 SCAN_COMPANION_OUTPUT_PATHS ?= $(SCAN_REPORT_HTML) $(SCAN_REPORT_JSON)
 SCAN_OUTPUT_PATHS ?= $(SCAN_PRIMARY_OUTPUT_PATHS) $(SCAN_COMPANION_OUTPUT_PATHS)
 PORTFOLIO_REPORT_TEXT ?= $(CURDIR)/reports/portfolio_backtest.txt
 PORTFOLIO_REPORT_HTML ?= $(CURDIR)/reports/portfolio_backtest.html
 PORTFOLIO_REPORT_JSON ?= $(CURDIR)/reports/portfolio_backtest.json
+PORTFOLIO_RECOMMENDED_OUTPUT_PATH ?= $(PORTFOLIO_REPORT_HTML)
 PORTFOLIO_PRIMARY_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT)
 PORTFOLIO_COMPANION_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_HTML) $(PORTFOLIO_REPORT_JSON)
 PORTFOLIO_OUTPUT_PATHS ?= $(PORTFOLIO_PRIMARY_OUTPUT_PATHS) $(PORTFOLIO_COMPANION_OUTPUT_PATHS)
 DATASET_EXPORT_CSV ?= $(CURDIR)/reports/training_dataset.csv
 DATASET_EXPORT_TEXT ?= $(CURDIR)/reports/training_dataset.txt
 DATASET_EXPORT_JSON ?= $(CURDIR)/reports/training_dataset.json
+DATASET_RECOMMENDED_OUTPUT_PATH ?= $(DATASET_EXPORT_CSV)
 DATASET_PRIMARY_OUTPUT_PATHS ?= $(DATASET_EXPORT_TEXT)
 DATASET_COMPANION_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
 DATASET_OUTPUT_PATHS ?= $(DATASET_PRIMARY_OUTPUT_PATHS) $(DATASET_COMPANION_OUTPUT_PATHS)
@@ -39,6 +42,7 @@ MODEL_PREDICTIONS ?= $(CURDIR)/reports/model_predictions.csv
 MODEL_REGRESSION_JSON ?= $(CURDIR)/reports/linear_model.json
 MODEL_CLASSIFIER_JSON ?= $(CURDIR)/reports/benchmark_classifier.json
 MODEL_VERSIONS_DIR ?= $(CURDIR)/reports/model_versions
+MODEL_RECOMMENDED_OUTPUT_PATH ?= $(MODEL_PIPELINE_REPORT)
 MODEL_PRIMARY_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
 MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON)
 MODEL_OUTPUT_PATHS ?= $(MODEL_PRIMARY_OUTPUT_PATHS) $(MODEL_COMPANION_OUTPUT_PATHS) $(MODEL_VERSIONS_DIR)
@@ -57,7 +61,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected follow-up report/artifact paths for scan, portfolio, dataset, and model, including key HTML/JSON/CSV companions and whether each exists on disk"
+	@echo "make show-output-paths # print all expected generated artifacts for scan, portfolio, dataset, and model, plus one open-this-first artifact per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -87,15 +91,15 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
-	print_paths "scan primary text artifact:" $(SCAN_PRIMARY_OUTPUT_PATHS); \
-	print_paths "scan HTML/JSON companions:" $(SCAN_COMPANION_OUTPUT_PATHS); \
-	print_paths "portfolio primary text artifact:" $(PORTFOLIO_PRIMARY_OUTPUT_PATHS); \
-	print_paths "portfolio HTML/JSON companions:" $(PORTFOLIO_COMPANION_OUTPUT_PATHS); \
-	print_paths "dataset primary text artifact:" $(DATASET_PRIMARY_OUTPUT_PATHS); \
-	print_paths "dataset CSV/JSON companions:" $(DATASET_COMPANION_OUTPUT_PATHS); \
-	print_paths "model current/latest primary artifact:" $(MODEL_PRIMARY_OUTPUT_PATHS); \
-	print_paths "model current/latest JSON/CSV companions:" $(MODEL_COMPANION_OUTPUT_PATHS); \
-	print_paths "model versioned history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
+	print_paths "scan open this first artifact:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan all generated artifacts:" $(SCAN_OUTPUT_PATHS); \
+	print_paths "portfolio open this first artifact:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio all generated artifacts:" $(PORTFOLIO_OUTPUT_PATHS); \
+	print_paths "dataset open this first artifact:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset all generated artifacts:" $(DATASET_OUTPUT_PATHS); \
+	print_paths "model open this first artifact:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "model all generated current/latest artifacts:" $(MODEL_LATEST_OUTPUT_PATHS); \
+	print_paths "model generated history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
 	@echo "==> validate-config (GOCACHE=$(GOCACHE))"
