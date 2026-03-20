@@ -29,7 +29,7 @@ REPORT_OVERVIEW_MACHINE_PATHS ?= $(REPORT_DASHBOARD_OVERVIEW_JSON) $(REPORT_MARK
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
 OVERVIEW_GROUP_PAIRING_NOTE ?= grouped overview HTML is for quick human scanning; grouped JSON is for automation/downstream tooling; JSON stays in HTML order for line-for-line pairing.
-WORKFLOW_GROUP_PAIRING_NOTE ?= grouped workflow blocks are ordered latest output → machine-readable companion → summary views → structured data/model files → archive/history → archive/history machine-readable companion.
+WORKFLOW_GROUP_PAIRING_NOTE ?= grouped workflow order is open this first → machine → summaries → structured → archive → archive start → archive machine.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
@@ -170,7 +170,7 @@ show-output-paths:
 		done; \
 	}; \
 	echo "note: overview starts with the primary and intent-specific HTML+JSON pairs, then grouped broad-overview blocks. Shared pairing semantics: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
-	echo "note: workflow blocks split quick monitoring (scan/portfolio) from deeper review (dataset/model); shared order is open this first → machine → summaries → structured files → archive → archive start here → archive machine; model exception: latest human-readable entry is text, closest machine-readable companion is predictions CSV, not JSON."; \
+	echo "note: workflow blocks split quick monitoring (scan/portfolio) from deeper review (dataset/model); $(WORKFLOW_GROUP_PAIRING_NOTE) Model exception: latest human-readable entry is text, closest machine-readable companion is predictions CSV, not JSON."; \
 	print_paths "start: primary:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "start: trading day:" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
 	print_paths "start: market context:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
