@@ -102,13 +102,11 @@ The broad overview area is split into quick monitoring (`reports/dashboard.html`
 
 The workflow-specific area begins with compact grouped quick-monitoring versus deeper-review blocks for `latest`, `machine-readable`, `summaries`, `structured`, and `archive` views before the detailed per-workflow sections.
 
-Within each per-workflow section, the helper uses one shared order: `open this first`, `machine-readable`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present. The one notable model-specific quirk is that its latest human-readable entry is a text summary, while its closest machine-readable companion is the predictions CSV rather than JSON.
+Within each per-workflow section, the helper uses one shared order: `open this first`, `machine-readable`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present.
 
 Use the workflow-specific `open this first` path when you are actively monitoring one workflow or checking it immediately after completion. Use the `summaries` plus `structured files` lists for deeper follow-up or automation inputs. Use the archive/history lines when you need a prior run.
 
-The current/latest `open this first` path and the history/archive `open this first` file are chosen independently, so a format mismatch is intentional when it appears. For example, latest views may default to HTML while archive entry points may default to HTML or CSV/text depending on what is most useful for that workflow.
-
-For scan, portfolio, and dataset, the archive first-open path is also paired with its closest machine-readable companion. For model, the current/latest human-readable summaries remain separate from the machine-readable predictions/JSON artifacts while history lives under `reports/model_versions/`.
+The current/latest `open this first` path and the history/archive `open this first` file are chosen independently, so a format mismatch is intentional when it appears: latest views may default to HTML, while archive entry points may use HTML or CSV/text depending on what is most useful for that workflow. For scan, portfolio, and dataset, the archive first-open path is also paired with its closest machine-readable companion. For model, the latest human-readable entry is a text summary, its closest machine-readable companion is the predictions CSV rather than JSON, and history lives under `reports/model_versions/`.
 
 `make validate-config` runs only layered runtime config validation.
 
