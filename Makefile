@@ -4,6 +4,9 @@ PYTHON ?= python3
 PYTHONPYCACHEPREFIX ?= $(CURDIR)/.cache/python
 SCHEDULER_CMD ?= ./cmd/scheduler
 RUNTIME_CONFIG_SNAPSHOT ?= $(CURDIR)/reports/runtime_config.json
+REPORTS_DIR ?= $(CURDIR)/reports
+REPORT_HISTORY_DIR ?= $(REPORTS_DIR)/history
+REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
@@ -31,6 +34,7 @@ SCAN_MACHINE_OUTPUT_PATHS ?= $(SCAN_REPORT_JSON)
 SCAN_FOCUS_SHORTLIST_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_TEXT) $(SCAN_FOCUS_SHORTLIST_HTML) $(SCAN_FOCUS_SHORTLIST_JSON)
 SCAN_FOCUS_HUMAN_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_TEXT) $(SCAN_FOCUS_SHORTLIST_HTML)
 SCAN_FOCUS_MACHINE_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_JSON)
+SCAN_HISTORY_OUTPUT_PATHS ?= $(REPORT_HISTORY_DATE_PATTERN)/a_share_scan
 PORTFOLIO_REPORT_TEXT ?= $(CURDIR)/reports/portfolio_backtest.txt
 PORTFOLIO_REPORT_HTML ?= $(CURDIR)/reports/portfolio_backtest.html
 PORTFOLIO_REPORT_JSON ?= $(CURDIR)/reports/portfolio_backtest.json
@@ -41,6 +45,7 @@ PORTFOLIO_COMPANION_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_HTML) $(PORTFOLIO_REPORT_
 PORTFOLIO_OUTPUT_PATHS ?= $(PORTFOLIO_PRIMARY_OUTPUT_PATHS) $(PORTFOLIO_COMPANION_OUTPUT_PATHS)
 PORTFOLIO_HUMAN_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_TEXT) $(PORTFOLIO_REPORT_HTML)
 PORTFOLIO_MACHINE_OUTPUT_PATHS ?= $(PORTFOLIO_REPORT_JSON) $(PORTFOLIO_REPORT_CSV)
+PORTFOLIO_HISTORY_OUTPUT_PATHS ?= $(REPORT_HISTORY_DATE_PATTERN)/portfolio_backtest
 DATASET_EXPORT_CSV ?= $(CURDIR)/reports/training_dataset.csv
 DATASET_EXPORT_TEXT ?= $(CURDIR)/reports/training_dataset.txt
 DATASET_EXPORT_JSON ?= $(CURDIR)/reports/training_dataset.json
@@ -50,6 +55,7 @@ DATASET_COMPANION_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
 DATASET_OUTPUT_PATHS ?= $(DATASET_PRIMARY_OUTPUT_PATHS) $(DATASET_COMPANION_OUTPUT_PATHS)
 DATASET_HUMAN_OUTPUT_PATHS ?= $(DATASET_EXPORT_TEXT)
 DATASET_MACHINE_OUTPUT_PATHS ?= $(DATASET_EXPORT_CSV) $(DATASET_EXPORT_JSON)
+DATASET_HISTORY_OUTPUT_PATHS ?= $(REPORT_HISTORY_DATE_PATTERN)/training_dataset
 MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
 MODEL_TRAIN_REPORT ?= $(CURDIR)/reports/model_train.txt
 MODEL_CLASSIFIER_REPORT ?= $(CURDIR)/reports/benchmark_classifier.txt
@@ -58,7 +64,7 @@ MODEL_CLASSIFIER_PREDICTIONS ?= $(CURDIR)/reports/benchmark_classifier_predictio
 MODEL_REGRESSION_JSON ?= $(CURDIR)/reports/linear_model.json
 MODEL_CLASSIFIER_JSON ?= $(CURDIR)/reports/benchmark_classifier.json
 MODEL_REGISTRY_LOG ?= $(CURDIR)/reports/model_registry.jsonl
-MODEL_VERSIONS_DIR ?= $(CURDIR)/reports/model_versions
+MODEL_VERSIONS_DIR ?= $(REPORTS_DIR)/model_versions
 MODEL_RECOMMENDED_OUTPUT_PATH ?= $(MODEL_PIPELINE_REPORT)
 MODEL_PRIMARY_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT)
 MODEL_COMPANION_OUTPUT_PATHS ?= $(MODEL_PREDICTIONS) $(MODEL_CLASSIFIER_PREDICTIONS) $(MODEL_REGRESSION_JSON) $(MODEL_CLASSIFIER_JSON) $(MODEL_REGISTRY_LOG)
@@ -81,7 +87,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected generated output paths for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected current output paths plus history/archive inspection locations for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -107,7 +113,11 @@ show-output-paths:
 		label="$$1"; shift; \
 		echo "$$label"; \
 		for path in "$$@"; do \
-			if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
+			if printf '%s\n' "$$path" | grep -q '/YYYY-MM-DD/'; then \
+				history_root="$${path%%/YYYY-MM-DD/*}"; \
+				run_type="$${path##*/}"; \
+				if [ -d "$$history_root" ] && find "$$history_root" -type d -name "$$run_type" 2>/dev/null | grep -Eq "/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/$$run_type$$"; then status="present"; else status="missing"; fi; \
+			elif [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
@@ -116,12 +126,15 @@ show-output-paths:
 	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist summary views:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
 	print_paths "scan focus-only shortlist structured data/model files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan timestamped history/archive pattern:" $(SCAN_HISTORY_OUTPUT_PATHS); \
 	print_paths "portfolio open this first path:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "portfolio summary views:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
 	print_paths "portfolio structured data/model files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
+	print_paths "portfolio timestamped history/archive pattern:" $(PORTFOLIO_HISTORY_OUTPUT_PATHS); \
 	print_paths "dataset open this first path:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "dataset summary views:" $(DATASET_HUMAN_OUTPUT_PATHS); \
 	print_paths "dataset structured data/model files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
+	print_paths "dataset timestamped history/archive pattern:" $(DATASET_HISTORY_OUTPUT_PATHS); \
 	print_paths "model open this first path:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "model current/latest summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
 	print_paths "model current/latest structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
