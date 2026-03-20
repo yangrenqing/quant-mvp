@@ -3,3 +3,4 @@ reports/
 .DS_Store
 data/cache/
 /scheduler
+/.cache/

@@ -1,8 +1,11 @@
 GO ?= /usr/local/go/bin/go
+GOCACHE ?= $(CURDIR)/.cache/go-build
 PYTHON ?= python3
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
+
+export GOCACHE
 
 .PHONY: help scan portfolio dataset model validate-config daily verify
 
