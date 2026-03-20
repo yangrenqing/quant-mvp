@@ -171,11 +171,11 @@ show-output-paths:
 	}; \
 	echo "note: overview starts with the primary and intent-specific HTML+JSON pairs, then grouped broad-overview blocks. Shared pairing semantics: $(OVERVIEW_GROUP_PAIRING_NOTE)"; \
 	echo "note: workflow blocks split quick monitoring (scan/portfolio) from deeper review (dataset/model); shared order is open this first → machine-readable → summaries → structured files → archive → archive start here → archive machine; model exception: latest human-readable entry is text, closest machine-readable companion is predictions CSV, not JSON."; \
-	print_paths "overview pair: primary:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
-	print_paths "overview pair: trading day:" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
-	print_paths "overview pair: market context:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
-	print_paths "overview pair: after close:" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
-	print_paths "overview pair: research wrap-up:" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
+	print_paths "start: primary:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "start: trading day:" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
+	print_paths "start: market context:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
+	print_paths "start: after close:" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
+	print_paths "start: research wrap-up:" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
 	print_paths "overview pages: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_PATHS); \
 	print_paths "overview pages: deeper review:" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "overview JSON: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
