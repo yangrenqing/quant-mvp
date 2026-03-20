@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,6 +58,67 @@ func TestLoadDefaultsPortfolioMaxCashShareWhenOmitted(t *testing.T) {
 
 	if cfg.Portfolio.MaxCashShare != 0.20 {
 		t.Fatalf("MaxCashShare = %v, want 0.20", cfg.Portfolio.MaxCashShare)
+	}
+}
+
+func TestLoadLocalOverridesEarlierLayers(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nstrategy:\n  short_window: 3\n  long_window: 5\n")
+	writeFile(t, filepath.Join(dir, "data.yaml"), "db:\n  path: data/from-data.db\n")
+	writeFile(t, filepath.Join(dir, "portfolio.yaml"), "portfolio:\n  max_cash_share: 0.35\n")
+	writeFile(t, filepath.Join(dir, "report.yaml"), "report:\n  history_root: reports/from-report\n")
+	writeFile(t, filepath.Join(dir, "local.yaml"), "db:\n  path: data/from-local.db\nportfolio:\n  max_cash_share: 0.10\nreport:\n  history_root: reports/from-local\n")
+
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.DB.Path != "data/from-local.db" {
+		t.Fatalf("DB.Path = %q, want local override", cfg.DB.Path)
+	}
+	if cfg.Portfolio.MaxCashShare != 0.10 {
+		t.Fatalf("MaxCashShare = %v, want local override", cfg.Portfolio.MaxCashShare)
+	}
+	if cfg.Report.HistoryRoot != "reports/from-local" {
+		t.Fatalf("HistoryRoot = %q, want local override", cfg.Report.HistoryRoot)
+	}
+}
+
+func TestWriteRuntimeSnapshotCreatesParentsAndFormatsJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "runtime", "snapshot.json")
+	cfg := Config{
+		AppName: "quant-mvp-test",
+		App: AppConfig{
+			Name: "quant-mvp-test",
+		},
+		DB: DBConfig{
+			Path: "data/custom.db",
+		},
+	}
+
+	if err := WriteRuntimeSnapshot(path, cfg); err != nil {
+		t.Fatalf("WriteRuntimeSnapshot() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		t.Fatalf("parent directory not created: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+
+	want, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	want = append(want, '\n')
+
+	if string(got) != string(want) {
+		t.Fatalf("snapshot contents = %q, want %q", got, want)
 	}
 }
 
