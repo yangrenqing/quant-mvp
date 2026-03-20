@@ -29,6 +29,8 @@ MODEL_PIPELINE_REPORT ?= $(CURDIR)/reports/model_pipeline_latest.txt
 MODEL_PREDICTIONS ?= $(CURDIR)/reports/model_predictions.csv
 MODEL_VERSIONS_DIR ?= $(CURDIR)/reports/model_versions
 MODEL_OUTPUT_PATHS ?= $(MODEL_PIPELINE_REPORT) $(MODEL_PREDICTIONS) $(MODEL_VERSIONS_DIR)
+MODEL_LATEST_OUTPUT_PATHS ?= $(filter-out $(MODEL_VERSIONS_DIR),$(MODEL_OUTPUT_PATHS))
+MODEL_HISTORY_OUTPUT_PATHS ?= $(filter $(MODEL_VERSIONS_DIR),$(MODEL_OUTPUT_PATHS))
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
@@ -42,7 +44,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected follow-up report/artifact paths for scan, portfolio, dataset, and model plus whether each exists on disk"
+	@echo "make show-output-paths # print expected follow-up report/artifact paths for scan, portfolio, dataset, and model, separating model current/latest outputs from the versioned history directory, plus whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -67,8 +69,7 @@ show-output-paths:
 	@for workflow in \
 		"scan|$(SCAN_OUTPUT_PATHS)" \
 		"portfolio|$(PORTFOLIO_OUTPUT_PATHS)" \
-		"dataset|$(DATASET_OUTPUT_PATHS)" \
-		"model|$(MODEL_OUTPUT_PATHS)"; do \
+		"dataset|$(DATASET_OUTPUT_PATHS)"; do \
 		name=$${workflow%%|*}; \
 		paths=$${workflow#*|}; \
 		echo "$$name expected follow-up artifacts:"; \
@@ -76,6 +77,16 @@ show-output-paths:
 			if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
+	done
+	@echo "model current/latest follow-up artifacts:"
+	@for path in $(MODEL_LATEST_OUTPUT_PATHS); do \
+		if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
+		printf '  [%s] %s\n' "$$status" "$$path"; \
+	done
+	@echo "model versioned history directory:"
+	@for path in $(MODEL_HISTORY_OUTPUT_PATHS); do \
+		if [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
+		printf '  [%s] %s\n' "$$status" "$$path"; \
 	done
 
 validate-config:

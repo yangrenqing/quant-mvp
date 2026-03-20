@@ -90,7 +90,7 @@ make verify
 make daily
 ```
 
-`make show-output-paths` prints the most useful downstream report/artifact paths to inspect after `make scan`, `make portfolio`, `make dataset`, or `make model`, and it marks each expected path as currently `present` or `missing` on disk. Use it right after one of those workflow targets finishes when you want to distinguish the documented output locations from the outputs that have already been generated without re-checking the workflow docs.
+`make show-output-paths` prints the most useful downstream report/artifact paths to inspect after `make scan`, `make portfolio`, `make dataset`, or `make model`, and it marks each expected path as currently `present` or `missing` on disk. For `make model`, it now separates the current/latest outputs under `reports/` from the versioned history directory at `reports/model_versions/`, so operators can quickly tell which paths are the actively consumed outputs versus the archived per-run snapshots. Use it right after one of those workflow targets finishes when you want to distinguish the documented output locations from the outputs that have already been generated without re-checking the workflow docs.
 
 `make validate-config` runs only layered runtime config validation.
 
