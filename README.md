@@ -81,6 +81,7 @@ make scan
 make portfolio
 make dataset
 make model
+make show-output-paths
 make validate-config
 make export-runtime-config
 make show-check-paths
@@ -88,6 +89,8 @@ make quick-check
 make verify
 make daily
 ```
+
+`make show-output-paths` prints the most useful downstream report/artifact paths to inspect after `make scan`, `make portfolio`, `make dataset`, or `make model`. Use it right after one of those workflow targets finishes when you want the generated scan reports, portfolio reports, dataset exports, or latest model artifacts without re-checking the workflow docs.
 
 `make validate-config` runs only layered runtime config validation.
 
