@@ -176,10 +176,10 @@ show-output-paths:
 	print_paths "overview pair: market context:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
 	print_paths "overview pair: after close:" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
 	print_paths "overview pair: research wrap-up:" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
-	print_paths "broad overview pages: quick monitoring (HTML):" $(REPORT_OVERVIEW_MONITORING_PATHS); \
-	print_paths "broad overview pages: deeper review (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
-	print_paths "broad overview JSON companions: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
-	print_paths "broad overview JSON companions: deeper review:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
+	print_paths "overview pages: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_PATHS); \
+	print_paths "overview pages: deeper review:" $(REPORT_OVERVIEW_REVIEW_PATHS); \
+	print_paths "overview JSON: quick monitoring:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
+	print_paths "overview JSON: deeper review:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
 	print_paths "workflow latest: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
 	print_paths "workflow machine-readable: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
 	print_paths "workflow latest: deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
