@@ -8,6 +8,7 @@ REPORTS_DIR ?= $(CURDIR)/reports
 REPORT_HISTORY_DIR ?= $(REPORTS_DIR)/history
 REPORT_HISTORY_OVERVIEW_PATH ?= $(REPORTS_DIR)/history_compare.html
 REPORT_HISTORY_DATE_PATTERN ?= $(REPORT_HISTORY_DIR)/YYYY-MM-DD
+ARCHIVE_ENTRY_FORMAT_NOTE ?= scan/portfolio archive entry files default to HTML for quick visual review; dataset archive entry files default to CSV because the export is data-first.
 LAYERED_CONFIG_LOAD_ORDER ?= configs/config.yaml configs/data.yaml configs/portfolio.yaml configs/model.yaml configs/market.yaml configs/report.yaml
 LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
@@ -94,7 +95,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected current output paths, per-run history/archive inspection locations plus a best file to open first inside each archive, and the cross-run history overview entry point for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected current output paths, per-run history/archive inspection locations plus a best file to open first inside each archive, and the cross-run history overview entry point for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, whether each exists on disk, and when latest vs archive recommendations intentionally differ by format"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -128,6 +129,7 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
+	echo "note: current/latest and history/archive 'open this first' recommendations are chosen independently, so their formats may intentionally differ by workflow (latest often HTML; archive entry may be HTML or CSV/text)"; \
 	print_paths "cross-run history overview open this first path:" $(REPORT_HISTORY_OVERVIEW_PATH); \
 	print_paths "scan open this first path:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
