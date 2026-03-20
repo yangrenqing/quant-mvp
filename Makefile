@@ -3,6 +3,7 @@ GOCACHE ?= $(CURDIR)/.cache/go-build
 PYTHON ?= python3
 PYTHONPYCACHEPREFIX ?= $(CURDIR)/.cache/python
 RUNTIME_CONFIG_SNAPSHOT ?= $(CURDIR)/reports/runtime_config.json
+QUICK_CHECK_SHELL_SCRIPTS ?= scripts/daily_run.sh scripts/weekly_run.sh scripts/intraday_run.sh scripts/research_run.sh
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
@@ -17,8 +18,8 @@ help:
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
 	@echo "make validate-config # only validate layered runtime config"
-	@echo "make export-runtime-config # write reports/runtime_config.json and exit"
-	@echo "make show-check-paths # print cache/snapshot paths for local check troubleshooting"
+	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
+	@echo "make show-check-paths # print cache paths plus quick-check scripts and export output"
 	@echo "make quick-check # fast local checks: shell syntax, py_compile, and validate-config"
 	@echo "make daily      # run the full daily workflow"
 	@echo "make verify     # broader local preflight: Go tests plus make quick-check"
@@ -49,14 +50,14 @@ export-runtime-config:
 show-check-paths:
 	@echo "go build cache: $(GOCACHE)"
 	@echo "python bytecode cache: $(PYTHONPYCACHEPREFIX)"
-	@echo "runtime config snapshot: $(RUNTIME_CONFIG_SNAPSHOT)"
+	@echo "quick-check shell scripts: $(QUICK_CHECK_SHELL_SCRIPTS)"
+	@echo "export-runtime-config output: $(RUNTIME_CONFIG_SNAPSHOT)"
 
 quick-check:
 	@echo "==> quick-check: shell syntax"
-	@bash -n scripts/daily_run.sh
-	@bash -n scripts/weekly_run.sh
-	@bash -n scripts/intraday_run.sh
-	@bash -n scripts/research_run.sh
+	@for script in $(QUICK_CHECK_SHELL_SCRIPTS); do \
+		bash -n "$$script"; \
+	done
 	@echo "==> quick-check: Python bytecode"
 	@$(PYTHON) -m py_compile scripts/*.py
 	@echo "==> quick-check: layered runtime config"
