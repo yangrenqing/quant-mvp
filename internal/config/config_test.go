@@ -43,8 +43,12 @@ func TestLoadRejectsInvalidWindows(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "config.yaml"), "schedule:\n  daily_run: \"30 15 * * 1-5\"\nstrategy:\n  short_window: 9\n  long_window: 9\n")
 
-	if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil {
+	_, err := Load(filepath.Join(dir, "config.yaml"))
+	if err == nil {
 		t.Fatal("expected invalid short/long window error")
+	}
+	if !strings.Contains(err.Error(), "strategy.short_window must be smaller than strategy.long_window") {
+		t.Fatalf("Load() error = %v, want explicit window validation message", err)
 	}
 }
 
