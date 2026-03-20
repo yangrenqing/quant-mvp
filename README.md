@@ -105,8 +105,8 @@ Before the detailed per-workflow sections, the helper shows grouped quick-monito
 Inside each per-workflow section, the shared order is `open this first`, `machine`, `summaries`, `structured files`, `archive`, `archive start here`, and `archive machine` when present.
 
 Use the workflow-specific sections like this:
-- `open this first` → active monitoring or immediate post-run check
-- `summaries` / `structured files` → deeper follow-up or automation inputs
+- `open this first` → live monitoring or immediate post-run check
+- `summaries` / `structured files` → deeper review or automation
 - archive/history lines → prior-run inspection
 
 The latest and archive `open this first` entries are chosen independently, so format differences are expected:
