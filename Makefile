@@ -81,7 +81,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print expected generated artifacts for scan, portfolio, dataset, and model, grouped into human-readable vs machine-readable outputs (including the current/latest model text summaries), plus one open-this-first artifact per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected generated output paths for scan, portfolio, dataset, and model, grouped into summary views vs structured data/model files, plus one open-this-first path per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -111,20 +111,20 @@ show-output-paths:
 			printf '  [%s] %s\n' "$$status" "$$path"; \
 		done; \
 	}; \
-	print_paths "scan open this first artifact:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan human-readable artifacts:" $(SCAN_HUMAN_OUTPUT_PATHS); \
-	print_paths "scan machine-readable companions:" $(SCAN_MACHINE_OUTPUT_PATHS); \
-	print_paths "scan focus-only shortlist human-readable artifacts:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
-	print_paths "scan focus-only shortlist machine-readable companions:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
-	print_paths "portfolio open this first artifact:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "portfolio human-readable artifacts:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
-	print_paths "portfolio machine-readable companions:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
-	print_paths "dataset open this first artifact:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "dataset human-readable artifacts:" $(DATASET_HUMAN_OUTPUT_PATHS); \
-	print_paths "dataset machine-readable companions:" $(DATASET_MACHINE_OUTPUT_PATHS); \
-	print_paths "model open this first artifact:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "model current/latest human-readable artifacts:" $(MODEL_HUMAN_OUTPUT_PATHS); \
-	print_paths "model current/latest machine-readable companions:" $(MODEL_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan open this first path:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan structured data/model files:" $(SCAN_MACHINE_OUTPUT_PATHS); \
+	print_paths "scan focus-only shortlist summary views:" $(SCAN_FOCUS_HUMAN_OUTPUT_PATHS); \
+	print_paths "scan focus-only shortlist structured data/model files:" $(SCAN_FOCUS_MACHINE_OUTPUT_PATHS); \
+	print_paths "portfolio open this first path:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio summary views:" $(PORTFOLIO_HUMAN_OUTPUT_PATHS); \
+	print_paths "portfolio structured data/model files:" $(PORTFOLIO_MACHINE_OUTPUT_PATHS); \
+	print_paths "dataset open this first path:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset summary views:" $(DATASET_HUMAN_OUTPUT_PATHS); \
+	print_paths "dataset structured data/model files:" $(DATASET_MACHINE_OUTPUT_PATHS); \
+	print_paths "model open this first path:" $(MODEL_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "model current/latest summary views:" $(MODEL_HUMAN_OUTPUT_PATHS); \
+	print_paths "model current/latest structured data/model files:" $(MODEL_MACHINE_OUTPUT_PATHS); \
 	print_paths "model generated history directory:" $(MODEL_HISTORY_OUTPUT_PATHS)
 
 validate-config:
