@@ -19,10 +19,14 @@ VERIFY_FOLLOW_UP ?= console output from $(VERIFY_STEPS)
 SCAN_REPORT_TEXT ?= $(CURDIR)/reports/a_share_scan.txt
 SCAN_REPORT_HTML ?= $(CURDIR)/reports/a_share_scan.html
 SCAN_REPORT_JSON ?= $(CURDIR)/reports/a_share_scan.json
+SCAN_FOCUS_SHORTLIST_TEXT ?= $(CURDIR)/reports/a_share_focus.txt
+SCAN_FOCUS_SHORTLIST_HTML ?= $(CURDIR)/reports/a_share_focus.html
+SCAN_FOCUS_SHORTLIST_JSON ?= $(CURDIR)/reports/a_share_focus.json
 SCAN_RECOMMENDED_OUTPUT_PATH ?= $(SCAN_REPORT_HTML)
 SCAN_PRIMARY_OUTPUT_PATHS ?= $(SCAN_REPORT_TEXT)
 SCAN_COMPANION_OUTPUT_PATHS ?= $(SCAN_REPORT_HTML) $(SCAN_REPORT_JSON)
 SCAN_OUTPUT_PATHS ?= $(SCAN_PRIMARY_OUTPUT_PATHS) $(SCAN_COMPANION_OUTPUT_PATHS)
+SCAN_FOCUS_SHORTLIST_OUTPUT_PATHS ?= $(SCAN_FOCUS_SHORTLIST_TEXT) $(SCAN_FOCUS_SHORTLIST_HTML) $(SCAN_FOCUS_SHORTLIST_JSON)
 PORTFOLIO_REPORT_TEXT ?= $(CURDIR)/reports/portfolio_backtest.txt
 PORTFOLIO_REPORT_HTML ?= $(CURDIR)/reports/portfolio_backtest.html
 PORTFOLIO_REPORT_JSON ?= $(CURDIR)/reports/portfolio_backtest.json
@@ -61,7 +65,7 @@ help:
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
-	@echo "make show-output-paths # print all expected generated artifacts for scan, portfolio, dataset, and model, plus one open-this-first artifact per workflow, and whether each exists on disk"
+	@echo "make show-output-paths # print expected generated artifacts for scan (main report plus focus-only shortlist), portfolio, dataset, and model, plus one open-this-first artifact per workflow, and whether each exists on disk"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
 	@echo "make show-check-paths # print caches, config inputs, checked scripts, export output, and follow-up artifact/output for check targets"
@@ -92,7 +96,8 @@ show-output-paths:
 		done; \
 	}; \
 	print_paths "scan open this first artifact:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
-	print_paths "scan all generated artifacts:" $(SCAN_OUTPUT_PATHS); \
+	print_paths "scan main generated artifacts:" $(SCAN_OUTPUT_PATHS); \
+	print_paths "scan focus-only shortlist artifacts:" $(SCAN_FOCUS_SHORTLIST_OUTPUT_PATHS); \
 	print_paths "portfolio open this first artifact:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "portfolio all generated artifacts:" $(PORTFOLIO_OUTPUT_PATHS); \
 	print_paths "dataset open this first artifact:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
