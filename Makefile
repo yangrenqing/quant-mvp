@@ -180,18 +180,18 @@ show-output-paths:
 	print_paths "broad overview deeper narrative/review pages (HTML):" $(REPORT_OVERVIEW_REVIEW_PATHS); \
 	print_paths "broad overview quick operational monitoring JSON companions:" $(REPORT_OVERVIEW_MONITORING_MACHINE_PATHS); \
 	print_paths "broad overview deeper narrative/review JSON companions:" $(REPORT_OVERVIEW_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow quick operational monitoring latest outputs:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
-	print_paths "workflow quick operational monitoring machine-readable companions:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
-	print_paths "workflow deeper review latest outputs:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
-	print_paths "workflow deeper review machine-readable companions:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
-	print_paths "workflow quick operational monitoring summary views:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
-	print_paths "workflow deeper review summary views:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
-	print_paths "workflow quick operational monitoring structured data/model files:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
-	print_paths "workflow deeper review structured data/model files:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
-	print_paths "workflow quick operational monitoring archive/history follow-up:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
-	print_paths "workflow quick operational monitoring archive/history machine-readable companions:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
-	print_paths "workflow deeper review archive/history follow-up:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
-	print_paths "workflow deeper review archive/history machine-readable companions:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
+	print_paths "workflow latest outputs: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "workflow latest machine-readable: quick monitoring:" $(WORKFLOW_LATEST_MONITORING_MACHINE_PATHS); \
+	print_paths "workflow latest outputs: deeper review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "workflow latest machine-readable: deeper review:" $(WORKFLOW_LATEST_REVIEW_MACHINE_PATHS); \
+	print_paths "workflow summary views: quick monitoring:" $(WORKFLOW_SUMMARY_MONITORING_PATHS); \
+	print_paths "workflow summary views: deeper review:" $(WORKFLOW_SUMMARY_REVIEW_PATHS); \
+	print_paths "workflow structured data/model files: quick monitoring:" $(WORKFLOW_STRUCTURED_MONITORING_PATHS); \
+	print_paths "workflow structured data/model files: deeper review:" $(WORKFLOW_STRUCTURED_REVIEW_PATHS); \
+	print_paths "workflow archive/history: quick monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_PATHS); \
+	print_paths "workflow archive/history machine-readable: quick monitoring:" $(WORKFLOW_ARCHIVE_MONITORING_MACHINE_PATHS); \
+	print_paths "workflow archive/history: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_PATHS); \
+	print_paths "workflow archive/history machine-readable: deeper review:" $(WORKFLOW_ARCHIVE_REVIEW_MACHINE_PATHS); \
 	print_paths "scan open this first:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
 	print_paths "scan machine-readable companion:" $(SCAN_RECOMMENDED_MACHINE_OUTPUT_PATH); \
 	print_paths "scan summary views:" $(SCAN_HUMAN_OUTPUT_PATHS); \
