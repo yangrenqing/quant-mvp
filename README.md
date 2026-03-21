@@ -109,7 +109,7 @@ Start:
 
 Workflow groups: `latest`, `machine`, `summaries`, `structured`, and `archive`, split into quick monitoring vs deeper review.
 
-Line order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
+Order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
 Workflow key:
 - `open this first` → live monitoring or immediate post-run check
