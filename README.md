@@ -107,7 +107,7 @@ Start:
 - after the close → `reports/history_compare.html` + `reports/history_compare.json`
 - research wrap-up → `reports/research_summary.html` + `reports/research_summary.json`
 
-Grouped workflow view: `latest`, `machine`, `summaries`, `structured`, and `archive`, split into quick monitoring vs deeper review.
+Workflow groups: `latest`, `machine`, `summaries`, `structured`, and `archive`, split into quick monitoring vs deeper review.
 
 Line order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
