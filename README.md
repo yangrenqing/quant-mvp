@@ -81,6 +81,7 @@ make scan
 make portfolio
 make dataset
 make model
+make show-start-here
 make show-output-paths
 make validate-config
 make export-runtime-config
@@ -90,7 +91,7 @@ make verify
 make daily
 ```
 
-`make help` keeps the `make show-output-paths` summary short; run `make show-output-paths` for detailed operator guidance.
+`make show-start-here` is the lightweight companion to `make show-output-paths` when you only need the main entry paths.
 
 `make show-output-paths` prints the current report and artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main HTML/JSON pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
 

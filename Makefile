@@ -128,13 +128,14 @@ TOP ?= 10
 
 export GOCACHE PYTHONPYCACHEPREFIX
 
-.PHONY: help scan portfolio dataset model show-output-paths validate-config export-runtime-config show-check-paths quick-check daily verify
+.PHONY: help scan portfolio dataset model show-start-here show-output-paths validate-config export-runtime-config show-check-paths quick-check daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
+	@echo "make show-start-here # lightweight companion to show-output-paths; print main start-here paths only"
 	@echo "make show-output-paths # print overview + workflow output paths; detailed operator guidance lives in the helper output"
 	@echo "make validate-config # only validate layered runtime config"
 	@echo "make export-runtime-config # write $(RUNTIME_CONFIG_SNAPSHOT) and exit"
@@ -155,6 +156,32 @@ dataset:
 
 model:
 	$(PYTHON) scripts/model_pipeline.py --from $(FROM) --to $(TO) --label label_10d
+
+show-start-here:
+	@print_paths() { \
+		label="$$1"; shift; \
+		echo "$$label"; \
+		for path in "$$@"; do \
+			if printf '%s\n' "$$path" | grep -q '/YYYY-MM-DD/'; then \
+				history_root="$${path%%/YYYY-MM-DD/*}"; \
+				history_suffix="$${path#*/YYYY-MM-DD/}"; \
+				if [ -d "$$history_root" ] && find "$$history_root" -path "*/$$history_suffix" 2>/dev/null | grep -q .; then status="present"; else status="missing"; fi; \
+			elif [ -e "$$path" ]; then status="present"; else status="missing"; fi; \
+			printf '  [%s] %s\n' "$$status" "$$path"; \
+		done; \
+	}; \
+	echo "note: lightweight companion to show-output-paths; use it when you only need the main start-here paths."; \
+	print_paths "start: primary:" $(REPORT_OVERVIEW_RECOMMENDED_OUTPUT_PATH) $(REPORT_OVERVIEW_RECOMMENDED_MACHINE_OUTPUT_PATH); \
+	print_paths "start: trading day:" $(REPORT_OVERVIEW_LIVE_STATUS_PATH) $(REPORT_OVERVIEW_LIVE_STATUS_MACHINE_PATH); \
+	print_paths "start: market context:" $(REPORT_MARKET_OVERVIEW_PATH) $(REPORT_MARKET_OVERVIEW_JSON); \
+	print_paths "start: after close:" $(REPORT_OVERVIEW_RETROSPECTIVE_PATH) $(REPORT_OVERVIEW_RETROSPECTIVE_MACHINE_PATH); \
+	print_paths "start: research wrap-up:" $(REPORT_RESEARCH_SUMMARY_PATH) $(REPORT_RESEARCH_SUMMARY_JSON); \
+	print_paths "latest: monitoring:" $(WORKFLOW_LATEST_MONITORING_OUTPUT_PATHS); \
+	print_paths "latest: review:" $(WORKFLOW_LATEST_REVIEW_OUTPUT_PATHS); \
+	print_paths "scan open this first:" $(SCAN_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "portfolio open this first:" $(PORTFOLIO_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "dataset open this first:" $(DATASET_RECOMMENDED_OUTPUT_PATH); \
+	print_paths "model open this first:" $(MODEL_RECOMMENDED_OUTPUT_PATH)
 
 show-output-paths:
 	@print_paths() { \
