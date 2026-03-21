@@ -111,7 +111,7 @@ Before the per-workflow details, the helper shows grouped `latest`, `machine`, `
 
 Line order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
-Workflow labels:
+Workflow key:
 - `open this first` → live monitoring or immediate post-run check
 - `machine` → closest machine-readable companion
 - `summaries` / `structured` → deeper review or automation
