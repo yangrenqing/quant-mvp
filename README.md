@@ -115,7 +115,7 @@ Workflow key:
 - `open this first` → live monitoring or immediate post-run check
 - `machine` → closest machine-readable companion
 - `summaries` / `structured` → deeper review or automation
-- archive lines → prior-run inspection
+- archive → prior-run inspection
 
 Latest vs archive:
 - latest usually favors HTML
