@@ -91,7 +91,7 @@ make verify
 make daily
 ```
 
-`make show-start-here` is the quick companion to `make show-output-paths`: use it for the main entry paths plus grouped machine companions, and use `make show-output-paths` for the fuller path map.
+`make show-start-here` is the quick companion to `make show-output-paths`: use it for the main entry paths plus grouped machine companions. Use `make show-output-paths` when you need the full path map, grouped views, and archive follow-up paths.
 
 `make show-output-paths` prints the current report and artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main HTML/JSON pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
 
