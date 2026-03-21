@@ -96,7 +96,7 @@ make daily
 
 The broad overview area splits into quick monitoring (`reports/dashboard.html`, `reports/market_overview.html`) and deeper review (`reports/history_compare.html`, `reports/research_summary.html`).
 
-Overview labels:
+Label key:
 - `start: ...` → first stop for the given intent
 - `overview pages` → quick human scan
 - `overview JSON` → automation view in the same order
