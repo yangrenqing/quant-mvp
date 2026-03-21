@@ -117,7 +117,7 @@ Workflow key:
 - `summaries` / `structured` → deeper review or automation
 - archive lines → prior-run inspection
 
-Latest and archive `open this first` entries are chosen independently, so format differences are expected:
+Latest vs archive:
 - latest usually favors HTML
 - archive may use HTML, CSV, or text by workflow
 - scan, portfolio, and dataset archive start-here paths are paired with the closest machine-readable companion
