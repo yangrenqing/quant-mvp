@@ -90,9 +90,9 @@ make verify
 make daily
 ```
 
-`make help` now keeps the `make show-output-paths` summary intentionally short; run `make show-output-paths` itself for the detailed operator guidance.
+`make help` keeps the `make show-output-paths` summary short; run `make show-output-paths` for detailed operator guidance.
 
-`make show-output-paths` prints the current report/artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
+`make show-output-paths` prints the current report and artifact paths after `make scan`, `make portfolio`, `make dataset`, or `make model`. It starts with the main HTML/JSON overview pair: `reports/dashboard.html` for quick human scanning and `reports/dashboard.json` for the matching machine-readable view.
 
 The broad overview area splits into quick monitoring (`reports/dashboard.html`, `reports/market_overview.html`) and deeper review (`reports/history_compare.html`, `reports/research_summary.html`).
 
