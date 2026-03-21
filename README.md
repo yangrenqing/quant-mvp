@@ -107,9 +107,9 @@ Start here:
 - after the close → `reports/history_compare.html` + `reports/history_compare.json`
 - research wrap-up → `reports/research_summary.html` + `reports/research_summary.json`
 
-Before the detailed per-workflow sections, the helper shows grouped `latest`, `machine`, `summaries`, `structured`, and `archive` blocks split into quick monitoring vs deeper review.
+Before the per-workflow details, the helper shows grouped `latest`, `machine`, `summaries`, `structured`, and `archive` blocks split into quick monitoring vs deeper review.
 
-Per-workflow line order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
+Line order: `open this first`, `machine`, `summaries`, `structured`, `archive`, `archive start here`, and `archive machine` when present. Here, `machine` means the closest machine-readable companion.
 
 Workflow labels:
 - `open this first` → live monitoring or immediate post-run check
