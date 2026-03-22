@@ -13,6 +13,9 @@ def parse_args():
     parser.add_argument("--candidate", default="", help="Candidate strategy version name. Defaults to the latest paper-trial winner when available.")
     parser.add_argument("--reports-dir", default="reports", help="Directory for promotion reports.")
     parser.add_argument("--winner-artifact", default="reports/paper_trial_winner_latest.json", help="Paper-trial winner artifact used to enrich promotion decisions.")
+    parser.add_argument("--compare-artifact", default="reports/strategy_compare_latest.json", help="Strategy compare artifact used to ensure the candidate is represented in the compare pipeline.")
+    parser.add_argument("--require-compare-candidate", action="store_true", help="Require the compare artifact to point at the same canonical candidate before promotion.")
+    parser.add_argument("--require-compare-metrics", action="store_true", help="Require the compare artifact to contain candidate metrics before promotion.")
     parser.add_argument("--min-edge", type=float, default=0.0, help="Minimum required equity edge over active.")
     parser.add_argument("--min-observations", type=int, default=1, help="Minimum distinct market-day observations required for the candidate.")
     parser.add_argument("--min-winner-rank", type=int, default=1, help="Require the winner artifact rank to be at or above this threshold (1 means best rank only).")
@@ -89,7 +92,7 @@ def fetch_metrics(conn, mode_filter, strategy_version):
     }
 
 
-def load_winner_artifact(path_str):
+def load_json_artifact(path_str):
     path = Path(path_str)
     if not path.exists():
         return None
@@ -97,6 +100,43 @@ def load_winner_artifact(path_str):
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+
+
+def first_non_empty(*values):
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def compare_candidate_version(compare_artifact):
+    if not isinstance(compare_artifact, dict):
+        return ""
+    challenger_state = compare_artifact.get("challenger_state") or {}
+    promotion_gate = compare_artifact.get("promotion_gate") or {}
+    latest_shadow = compare_artifact.get("latest_shadow") or {}
+    return first_non_empty(
+        challenger_state.get("canonical_candidate_version"),
+        promotion_gate.get("candidate_version"),
+        latest_shadow.get("strategy_version"),
+    )
+
+
+def compare_metric_sources(compare_artifact, candidate_version):
+    if not isinstance(compare_artifact, dict):
+        return []
+    candidate_version = str(candidate_version or "").strip()
+    if not candidate_version:
+        return []
+    sources = []
+    latest_shadow = compare_artifact.get("latest_shadow") or {}
+    if str(latest_shadow.get("strategy_version") or "").strip() == candidate_version:
+        sources.append("latest_shadow")
+    winner_metrics = compare_artifact.get("winner_metrics") or {}
+    if str(winner_metrics.get("strategy_version") or "").strip() == candidate_version:
+        sources.append("winner_metrics")
+    return sources
 
 
 def write_report(reports_dir, summary):
@@ -151,7 +191,21 @@ def write_report(reports_dir, summary):
     text_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build_summary(args, market, active_version, candidate_version, active_metrics, candidate_metrics, winner_artifact, edge, promoted, reason, winner_gate_applied):
+def build_summary(
+    args,
+    market,
+    active_version,
+    candidate_version,
+    active_metrics,
+    candidate_metrics,
+    winner_artifact,
+    edge,
+    promoted,
+    reason,
+    winner_gate_applied,
+    compare_candidate="",
+    compare_metric_sources_used=None,
+):
     return {
         "market": market,
         "active_version": active_version,
@@ -159,6 +213,14 @@ def build_summary(args, market, active_version, candidate_version, active_metric
         "active_metrics": active_metrics,
         "candidate_metrics": candidate_metrics,
         "winner_artifact": winner_artifact,
+        "compare_artifact_path": args.compare_artifact,
+        "compare_candidate_version": compare_candidate,
+        "compare_metric_sources": compare_metric_sources_used or [],
+        "compare_gate_required": {
+            "candidate": bool(args.require_compare_candidate),
+            "metrics": bool(args.require_compare_metrics),
+        },
+        "compare_gate_applied": bool(args.require_compare_candidate or args.require_compare_metrics),
         "edge": edge,
         "min_edge": args.min_edge,
         "min_observations": args.min_observations,
@@ -199,12 +261,16 @@ def main():
     db_path = Path(args.db)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    winner_artifact = load_winner_artifact(args.winner_artifact)
+    winner_artifact = load_json_artifact(args.winner_artifact)
+    compare_artifact = load_json_artifact(args.compare_artifact)
     candidate_version = args.candidate.strip()
     if not candidate_version and winner_artifact:
         candidate_version = str(winner_artifact.get("candidate_version") or "").strip()
     if not candidate_version:
         raise SystemExit("candidate strategy not provided and no winner artifact candidate available")
+
+    compare_candidate = compare_candidate_version(compare_artifact)
+    compare_metric_sources_used = compare_metric_sources(compare_artifact, candidate_version)
 
     active = fetch_one(
         conn,
@@ -235,7 +301,7 @@ def main():
         raise SystemExit(f"candidate strategy not found: {candidate_version}")
 
     if active["version_name"] == candidate_version:
-        summary = build_summary(args, args.market, active["version_name"], candidate_version, None, None, winner_artifact, None, False, "candidate is already the active strategy", False)
+        summary = build_summary(args, args.market, active["version_name"], candidate_version, None, None, winner_artifact, None, False, "candidate is already the active strategy", False, compare_candidate=compare_candidate, compare_metric_sources_used=compare_metric_sources_used)
         write_report(args.reports_dir, summary)
         record_decision(conn, args.market, "noop", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -244,7 +310,7 @@ def main():
     active_metrics = fetch_metrics(conn, "live", active["version_name"])
     candidate_metrics = fetch_metrics(conn, f"shadow:{candidate_version}", candidate_version)
     if active_metrics is None or candidate_metrics is None:
-        summary = build_summary(args, args.market, active["version_name"], candidate_version, active_metrics, candidate_metrics, winner_artifact, None, False, "missing active or candidate paper metrics", False)
+        summary = build_summary(args, args.market, active["version_name"], candidate_version, active_metrics, candidate_metrics, winner_artifact, None, False, "missing active or candidate paper metrics", False, compare_candidate=compare_candidate, compare_metric_sources_used=compare_metric_sources_used)
         write_report(args.reports_dir, summary)
         record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -262,6 +328,8 @@ def main():
             False,
             f"market date mismatch: active={active_metrics['market_date']} candidate={candidate_metrics['market_date']}",
             False,
+            compare_candidate=compare_candidate,
+            compare_metric_sources_used=compare_metric_sources_used,
         )
         write_report(args.reports_dir, summary)
         record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
@@ -282,6 +350,50 @@ def main():
             False,
             f"candidate distinct market-day observations {candidate_observation_days} < {args.min_observations}",
             False,
+            compare_candidate=compare_candidate,
+            compare_metric_sources_used=compare_metric_sources_used,
+        )
+        write_report(args.reports_dir, summary)
+        record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+
+    if args.require_compare_candidate and compare_candidate != candidate_version:
+        summary = build_summary(
+            args,
+            args.market,
+            active["version_name"],
+            candidate_version,
+            active_metrics,
+            candidate_metrics,
+            winner_artifact,
+            None,
+            False,
+            f"compare artifact candidate mismatch: compare={compare_candidate or 'n/a'} candidate={candidate_version}",
+            False,
+            compare_candidate=compare_candidate,
+            compare_metric_sources_used=compare_metric_sources_used,
+        )
+        write_report(args.reports_dir, summary)
+        record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+
+    if args.require_compare_metrics and not compare_metric_sources_used:
+        summary = build_summary(
+            args,
+            args.market,
+            active["version_name"],
+            candidate_version,
+            active_metrics,
+            candidate_metrics,
+            winner_artifact,
+            None,
+            False,
+            f"compare artifact missing candidate metrics for {candidate_version}",
+            False,
+            compare_candidate=compare_candidate,
+            compare_metric_sources_used=compare_metric_sources_used,
         )
         write_report(args.reports_dir, summary)
         record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
@@ -382,6 +494,8 @@ def main():
         promoted,
         f"shadow equity edge {edge:.2f} {'>=' if promoted else '<'} min_edge {args.min_edge:.2f}; distinct_days={candidate_observation_days}",
         winner_gate_applied,
+        compare_candidate=compare_candidate,
+        compare_metric_sources_used=compare_metric_sources_used,
     )
 
     if promoted and not args.dry_run:

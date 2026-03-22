@@ -907,8 +907,11 @@ func runDailyWorkflow(pythonBin string, fromDate string, toDate string, topN int
 			return err
 		}
 	}
+	if err := runPythonScript(pythonBin, "scripts/strategy_compare.py"); err != nil {
+		return err
+	}
 	if !envBool("SKIP_PROMOTION") {
-		if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(minPromotionObservations)); err != nil {
+		if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--require-compare-candidate", "--require-compare-metrics", "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(minPromotionObservations)); err != nil {
 			return err
 		}
 	}
