@@ -9,6 +9,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REPORTS = ROOT / "reports"
 DB_PATH = ROOT / "data" / "quant.db"
+FRESHNESS_KEYS = (
+    "runFreshnessVerdict",
+    "degradedRun",
+    "providerFailureCount",
+    "staleLoadCount",
+    "symbolsFreshCount",
+    "symbolsStaleCount",
+    "symbolsFallbackCount",
+    "benchmarkBarDate",
+    "benchmarkFreshWithinTTL",
+    "cacheTTL",
+)
 
 
 def load_json(name):
@@ -19,6 +31,12 @@ def load_json(name):
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+
+
+def freshness_payload(source):
+    if not isinstance(source, dict):
+        return {}
+    return {key: source.get(key) for key in FRESHNESS_KEYS if key in source}
 
 
 def latest_row(conn, sql, params=()):
@@ -225,6 +243,7 @@ def main():
     )
     winner_artifact = load_json("paper_trial_winner_latest.json")
     promotion = load_json("strategy_promotion_latest.json")
+    diagnostics = load_json("diagnostics.json")
 
     if latest_live:
         attach_observations(conn, latest_live, latest_live.get("strategy_version"), "live")
@@ -330,6 +349,7 @@ def main():
         if winner_artifact
         else None,
     }
+    payload.update(freshness_payload(diagnostics))
 
     lines = [
         "Strategy Compare",

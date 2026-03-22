@@ -46,6 +46,7 @@ var runtimeConfig config
 var diagnosticsState = runtimeDiagnostics{
 	ProviderFailures: map[string]int{},
 	FallbackReasons:  []string{},
+	SymbolFreshness:  map[string]symbolFreshnessState{},
 }
 var diagnosticsMu sync.Mutex
 
@@ -487,12 +488,37 @@ type eventSnapshot struct {
 }
 
 type runtimeDiagnostics struct {
-	CacheHits        int
-	CacheMisses      int
-	CacheStaleLoads  int
-	ProviderFailures map[string]int
-	FallbackReasons  []string
-	LastUpdated      string
+	CacheHits               int
+	CacheMisses             int
+	CacheStaleLoads         int
+	ProviderFailures        map[string]int
+	FallbackReasons         []string
+	LastUpdated             string
+	SymbolsFreshCount       int                             `json:"-"`
+	SymbolsStaleCount       int                             `json:"-"`
+	SymbolsFallbackCount    int                             `json:"-"`
+	BenchmarkBarDate        string                          `json:"-"`
+	BenchmarkFreshWithinTTL bool                            `json:"-"`
+	CacheTTL                string                          `json:"-"`
+	SymbolFreshness         map[string]symbolFreshnessState `json:"-"`
+}
+
+type symbolFreshnessState struct {
+	FreshWithinTTL bool
+	UsedFallback   bool
+}
+
+type freshnessVerdictPayload struct {
+	RunFreshnessVerdict     string `json:"runFreshnessVerdict"`
+	DegradedRun             bool   `json:"degradedRun"`
+	ProviderFailureCount    int    `json:"providerFailureCount"`
+	StaleLoadCount          int    `json:"staleLoadCount"`
+	SymbolsFreshCount       int    `json:"symbolsFreshCount"`
+	SymbolsStaleCount       int    `json:"symbolsStaleCount"`
+	SymbolsFallbackCount    int    `json:"symbolsFallbackCount"`
+	BenchmarkBarDate        string `json:"benchmarkBarDate"`
+	BenchmarkFreshWithinTTL bool   `json:"benchmarkFreshWithinTTL"`
+	CacheTTL                string `json:"cacheTTL"`
 }
 
 func main() {
@@ -3595,7 +3621,7 @@ func writeBacktestReports(result backtestResult) error {
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
 		return err
 	}
-	if err := writeJSONFile(jsonPath, result); err != nil {
+	if err := writeJSONFileWithFreshness(jsonPath, result); err != nil {
 		return err
 	}
 	_ = appendExperimentRecord("backtest", map[string]any{
@@ -3961,7 +3987,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	if err := writeCSVFile(csvPath, csvRows); err != nil {
 		return err
 	}
-	if err := writeJSONFile(jsonPath, result); err != nil {
+	if err := writeJSONFileWithFreshness(jsonPath, result); err != nil {
 		return err
 	}
 	if runtimeConfig.DB.Path != "" && len(result.Snapshots) > 0 {
@@ -4130,7 +4156,7 @@ func writePaperTradingReports(result paperAccountResult) error {
 	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
 		return err
 	}
-	if err := writeJSONFile(jsonPath, result); err != nil {
+	if err := writeJSONFileWithFreshness(jsonPath, result); err != nil {
 		return err
 	}
 	runType := "paper_trading"
@@ -5676,6 +5702,68 @@ func noteProviderFailure(provider string, reason string) {
 	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
 }
 
+func configuredCacheTTL() time.Duration {
+	ttl, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Schedule.CacheTTL))
+	if err != nil || ttl <= 0 {
+		return 4 * time.Hour
+	}
+	return ttl
+}
+
+func configuredCacheTTLLabel() string {
+	label := strings.TrimSpace(runtimeConfig.Schedule.CacheTTL)
+	if label == "" {
+		return configuredCacheTTL().String()
+	}
+	return label
+}
+
+func refreshSymbolCountsLocked() {
+	diagnosticsState.SymbolsFreshCount = 0
+	diagnosticsState.SymbolsStaleCount = 0
+	diagnosticsState.SymbolsFallbackCount = 0
+	for _, state := range diagnosticsState.SymbolFreshness {
+		if state.FreshWithinTTL {
+			diagnosticsState.SymbolsFreshCount++
+			continue
+		}
+		diagnosticsState.SymbolsStaleCount++
+		if state.UsedFallback {
+			diagnosticsState.SymbolsFallbackCount++
+		}
+	}
+}
+
+func noteSymbolFreshness(symbol string, bars []marketBar, freshWithinTTL bool, usedFallback bool) {
+	if strings.TrimSpace(symbol) == "" || len(bars) == 0 {
+		return
+	}
+
+	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
+
+	if diagnosticsState.SymbolFreshness == nil {
+		diagnosticsState.SymbolFreshness = map[string]symbolFreshnessState{}
+	}
+
+	key := strings.ToUpper(strings.TrimSpace(symbol))
+	current := diagnosticsState.SymbolFreshness[key]
+	if freshWithinTTL {
+		current = symbolFreshnessState{FreshWithinTTL: true}
+	} else if !current.FreshWithinTTL {
+		current.UsedFallback = current.UsedFallback || usedFallback
+	}
+	diagnosticsState.SymbolFreshness[key] = current
+
+	if key == strings.ToUpper(aShareBenchmarkSymbol) {
+		diagnosticsState.BenchmarkBarDate = bars[len(bars)-1].Date
+		diagnosticsState.BenchmarkFreshWithinTTL = diagnosticsState.SymbolFreshness[key].FreshWithinTTL
+	}
+	diagnosticsState.CacheTTL = configuredCacheTTLLabel()
+	refreshSymbolCountsLocked()
+	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
+}
+
 func noteCacheHit() {
 	diagnosticsMu.Lock()
 	defer diagnosticsMu.Unlock()
@@ -5697,20 +5785,107 @@ func noteCacheStaleLoad() {
 	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
 }
 
-func writeDiagnosticsReports() error {
+func snapshotRuntimeDiagnostics() runtimeDiagnostics {
 	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
+
 	snapshot := runtimeDiagnostics{
-		CacheHits:        diagnosticsState.CacheHits,
-		CacheMisses:      diagnosticsState.CacheMisses,
-		CacheStaleLoads:  diagnosticsState.CacheStaleLoads,
-		ProviderFailures: map[string]int{},
-		FallbackReasons:  append([]string(nil), diagnosticsState.FallbackReasons...),
-		LastUpdated:      diagnosticsState.LastUpdated,
+		CacheHits:               diagnosticsState.CacheHits,
+		CacheMisses:             diagnosticsState.CacheMisses,
+		CacheStaleLoads:         diagnosticsState.CacheStaleLoads,
+		ProviderFailures:        map[string]int{},
+		FallbackReasons:         append([]string(nil), diagnosticsState.FallbackReasons...),
+		LastUpdated:             diagnosticsState.LastUpdated,
+		SymbolsFreshCount:       diagnosticsState.SymbolsFreshCount,
+		SymbolsStaleCount:       diagnosticsState.SymbolsStaleCount,
+		SymbolsFallbackCount:    diagnosticsState.SymbolsFallbackCount,
+		BenchmarkBarDate:        diagnosticsState.BenchmarkBarDate,
+		BenchmarkFreshWithinTTL: diagnosticsState.BenchmarkFreshWithinTTL,
+		CacheTTL:                diagnosticsState.CacheTTL,
 	}
 	for key, value := range diagnosticsState.ProviderFailures {
 		snapshot.ProviderFailures[key] = value
 	}
-	diagnosticsMu.Unlock()
+	return snapshot
+}
+
+func providerFailureCount(providerFailures map[string]int) int {
+	total := 0
+	for _, count := range providerFailures {
+		total += count
+	}
+	return total
+}
+
+func buildFreshnessVerdict(snapshot runtimeDiagnostics) freshnessVerdictPayload {
+	cacheTTL := strings.TrimSpace(snapshot.CacheTTL)
+	if cacheTTL == "" {
+		cacheTTL = configuredCacheTTLLabel()
+	}
+
+	providerFailures := providerFailureCount(snapshot.ProviderFailures)
+	verdict := "fresh"
+	switch {
+	case snapshot.SymbolsFreshCount == 0 && snapshot.SymbolsStaleCount == 0 && providerFailures > 0:
+		verdict = "failed"
+	case snapshot.SymbolsFallbackCount > 0 || snapshot.CacheStaleLoads > 0 || (snapshot.BenchmarkBarDate != "" && !snapshot.BenchmarkFreshWithinTTL):
+		verdict = "degraded"
+	case providerFailures > 0:
+		verdict = "warning"
+	}
+
+	return freshnessVerdictPayload{
+		RunFreshnessVerdict:     verdict,
+		DegradedRun:             verdict == "degraded" || verdict == "failed",
+		ProviderFailureCount:    providerFailures,
+		StaleLoadCount:          snapshot.CacheStaleLoads,
+		SymbolsFreshCount:       snapshot.SymbolsFreshCount,
+		SymbolsStaleCount:       snapshot.SymbolsStaleCount,
+		SymbolsFallbackCount:    snapshot.SymbolsFallbackCount,
+		BenchmarkBarDate:        snapshot.BenchmarkBarDate,
+		BenchmarkFreshWithinTTL: snapshot.BenchmarkFreshWithinTTL,
+		CacheTTL:                cacheTTL,
+	}
+}
+
+func attachFreshnessVerdict(payload any, snapshot runtimeDiagnostics) (map[string]any, error) {
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := map[string]any{}
+	if len(content) > 0 && string(content) != "null" {
+		if err := json.Unmarshal(content, &merged); err != nil {
+			return nil, err
+		}
+	}
+
+	freshnessJSON, err := json.Marshal(buildFreshnessVerdict(snapshot))
+	if err != nil {
+		return nil, err
+	}
+	freshness := map[string]any{}
+	if err := json.Unmarshal(freshnessJSON, &freshness); err != nil {
+		return nil, err
+	}
+	for key, value := range freshness {
+		merged[key] = value
+	}
+	return merged, nil
+}
+
+func writeJSONFileWithFreshness(path string, payload any) error {
+	snapshot := snapshotRuntimeDiagnostics()
+	merged, err := attachFreshnessVerdict(payload, snapshot)
+	if err != nil {
+		return err
+	}
+	return writeJSONFile(path, merged)
+}
+
+func writeDiagnosticsReports() error {
+	snapshot := snapshotRuntimeDiagnostics()
 
 	textPath := filepath.Join(reportsDir, "diagnostics.txt")
 	jsonPath := filepath.Join(reportsDir, "diagnostics.json")
@@ -5742,7 +5917,11 @@ func writeDiagnosticsReports() error {
 	if err := os.WriteFile(textPath, []byte(builder.String()), 0o644); err != nil {
 		return err
 	}
-	return writeJSONFile(jsonPath, snapshot)
+	merged, err := attachFreshnessVerdict(snapshot, snapshot)
+	if err != nil {
+		return err
+	}
+	return writeJSONFile(jsonPath, merged)
 }
 
 func cleanupOldArtifacts() error {
@@ -6286,8 +6465,9 @@ func loadAShareBarsWithPrimary(symbol string, primary string) ([]marketBar, stri
 
 func loadCachedProviderBars(provider string, symbol string, fetch func() ([]marketBar, error)) ([]marketBar, error) {
 	path := providerCachePath(provider, symbol)
-	if bars, fresh, err := loadCachedBars(path, 4*time.Hour); err == nil && fresh {
+	if bars, fresh, err := loadCachedBars(path, configuredCacheTTL()); err == nil && fresh {
 		noteCacheHit()
+		noteSymbolFreshness(symbol, bars, true, false)
 		return bars, nil
 	}
 	noteCacheMiss()
@@ -6295,14 +6475,17 @@ func loadCachedProviderBars(provider string, symbol string, fetch func() ([]mark
 	bars, err := fetch()
 	if err == nil {
 		if writeErr := writeBarsCache(path, bars); writeErr != nil {
+			noteSymbolFreshness(symbol, bars, true, false)
 			return bars, nil
 		}
+		noteSymbolFreshness(symbol, bars, true, false)
 		return bars, nil
 	}
 
 	if bars, _, cacheErr := loadCachedBars(path, 365*24*time.Hour); cacheErr == nil && len(bars) > 0 {
 		noteCacheStaleLoad()
 		noteProviderFailure(provider, err.Error())
+		noteSymbolFreshness(symbol, bars, false, true)
 		return bars, nil
 	}
 	noteProviderFailure(provider, err.Error())
@@ -7628,7 +7811,7 @@ func writeAShareScanReports(candidates []scanCandidate) error {
 	if err := os.WriteFile(focusHTMLPath, []byte(focusHTML), 0o644); err != nil {
 		return err
 	}
-	if err := writeJSONFile(jsonPath, map[string]any{
+	if err := writeJSONFileWithFreshness(jsonPath, map[string]any{
 		"watch":   watch,
 		"observe": observe,
 		"avoid":   avoid,
