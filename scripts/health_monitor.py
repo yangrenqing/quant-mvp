@@ -52,8 +52,7 @@ def tail_text(path: Path, limit: int = 20) -> str:
 
 def latest_row(conn, sql: str):
     cur = conn.execute(sql)
-    row = cur.fetchone()
-    return row
+    return cur.fetchone()
 
 
 def main() -> int:
@@ -75,22 +74,14 @@ def main() -> int:
     latest_live = latest_row(conn, "SELECT strategy_version, market_date, equity, order_count FROM paper_daily_metrics WHERE mode = 'live' ORDER BY id DESC LIMIT 1;")
     latest_shadow = latest_row(conn, "SELECT strategy_version, market_date, equity, order_count FROM paper_daily_metrics WHERE mode LIKE 'shadow:%' ORDER BY id DESC LIMIT 1;")
     latest_promotion = latest_row(conn, "SELECT event_type, from_version, to_version, trigger_reason, recorded_at FROM strategy_promotions ORDER BY id DESC LIMIT 1;")
-    winner_artifact = {}
-    winner_path = REPORTS / "paper_trial_winner_latest.json"
-    if winner_path.exists():
-        try:
-            winner_artifact = json.loads(winner_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            winner_artifact = {}
-
-    diagnostics_path = REPORTS / "diagnostics.json"
-    diagnostics = {}
-    if diagnostics_path.exists():
-        diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    winner_artifact = load_json("paper_trial_winner_latest.json")
+    diagnostics = load_json("diagnostics.json")
     strategy_compare = load_json("strategy_compare_latest.json")
+    data_quality_summary = load_json("data_quality_summary.json")
 
     provider_failures = diagnostics.get("ProviderFailures") or diagnostics.get("provider_failures") or {}
     provider_failure_total = int(sum(provider_failures.values())) if isinstance(provider_failures, dict) else 0
+    stale_cache_loads = int(diagnostics.get("CacheStaleLoads") or diagnostics.get("cache_stale_loads") or 0)
 
     alerts = []
     warnings = []
@@ -118,6 +109,7 @@ def main() -> int:
             warnings.append(f"shadow is ahead of active by {diff_ratio:.2%}")
         if active_equity < 100000 * min_active_equity_ratio:
             warnings.append(f"active equity ratio fell below {min_active_equity_ratio:.2f}")
+
     if winner_artifact:
         winner_candidate = str(winner_artifact.get("candidate_version") or "")
         winner_equity_delta = float(winner_artifact.get("equity_delta") or 0.0)
@@ -130,6 +122,24 @@ def main() -> int:
 
     if provider_failure_total >= provider_failure_alert_count:
         warnings.append(f"provider failures observed: {provider_failure_total}")
+    if stale_cache_loads > 0:
+        warnings.append(f"stale cache loads observed: {stale_cache_loads}")
+
+    freshness_state = ((data_quality_summary.get("summary") or {}).get("status") or "").strip().lower()
+    if freshness_state in {"failed", "critical"}:
+        alerts.append(f"data quality verdict is {freshness_state}")
+    elif freshness_state in {"degraded", "warning"}:
+        warnings.append(f"data quality verdict is {freshness_state}")
+
+    promotion_gate = (strategy_compare.get("promotion_gate") or {}) if strategy_compare else {}
+    gate_status = str(promotion_gate.get("status") or "").strip().lower()
+    if gate_status in {"stale", "missing"}:
+        warnings.append(f"promotion gate state is {gate_status}: {promotion_gate.get('reason', 'n/a')}")
+
+    challenger_state = (strategy_compare.get("challenger_state") or {}) if strategy_compare else {}
+    challenger_sync_status = str(challenger_state.get("sync_status") or "").strip().lower()
+    if challenger_sync_status in {"promotion-stale", "shadow-mismatch"}:
+        warnings.append(f"challenger sync is {challenger_sync_status}: {challenger_state.get('sync_reason', 'n/a')}")
 
     daily_err = tail_text(REPORTS / "launchd_daily.err")
     weekly_err = tail_text(REPORTS / "launchd_weekly.err")
@@ -155,8 +165,10 @@ def main() -> int:
         "latest_promotion": dict(latest_promotion) if latest_promotion else None,
         "winner_artifact": winner_artifact or None,
         "strategy_compare": strategy_compare or None,
+        "data_quality_summary": data_quality_summary or None,
         "last_run_age_hours": last_run_age_hours,
         "provider_failure_total": provider_failure_total,
+        "stale_cache_loads": stale_cache_loads,
         "alerts": alerts,
         "warnings": warnings,
     }
@@ -183,7 +195,15 @@ def main() -> int:
             if strategy_compare
             else "Promotion gate: n/a"
         ),
+        (
+            f"Challenger sync: {(strategy_compare.get('challenger_state') or {}).get('sync_status', 'n/a')} "
+            f"({(strategy_compare.get('challenger_state') or {}).get('sync_reason', 'n/a')})"
+            if strategy_compare
+            else "Challenger sync: n/a"
+        ),
+        f"Data quality verdict: {freshness_state or 'n/a'}",
         f"Provider failures: {provider_failure_total}",
+        f"Stale cache loads: {stale_cache_loads}",
         "",
         "Alerts:",
     ]

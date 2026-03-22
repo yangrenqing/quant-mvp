@@ -64,6 +64,25 @@ def equity_ratio(lhs, rhs):
     return (safe_float(lhs.get("equity")) - rhs_equity) / rhs_equity
 
 
+def observation_counts(conn, strategy_version, mode_filter):
+    if not strategy_version:
+        return {"raw": 0, "distinct_market_days": 0}
+    row = conn.execute(
+        """
+        SELECT COUNT(*), COUNT(DISTINCT market_date)
+        FROM paper_daily_metrics
+        WHERE strategy_version = ? AND mode LIKE ?
+        """,
+        (strategy_version, mode_filter),
+    ).fetchone()
+    if row is None:
+        return {"raw": 0, "distinct_market_days": 0}
+    return {
+        "raw": safe_int(row[0], 0),
+        "distinct_market_days": safe_int(row[1], 0),
+    }
+
+
 def format_metric(label, payload):
     if not payload:
         return f"{label}: n/a"
@@ -72,7 +91,8 @@ def format_metric(label, payload):
         f"mode={payload.get('mode', 'n/a')} "
         f"date={payload.get('market_date', 'n/a')} "
         f"equity={safe_float(payload.get('equity')):.2f} "
-        f"obs={safe_int(payload.get('observations'), 0)}"
+        f"obs_raw={safe_int(payload.get('observations_raw'), 0)} "
+        f"obs_distinct_days={safe_int(payload.get('observations_distinct_market_days'), 0)}"
     )
 
 
@@ -87,16 +107,90 @@ def format_delta(label, absolute_value, ratio_value):
 def attach_observations(conn, payload, strategy_version, mode_filter):
     if not payload or not strategy_version:
         return payload
-    payload["observations"] = count_rows(
-        conn,
-        """
-        SELECT COUNT(*)
-        FROM paper_daily_metrics
-        WHERE strategy_version = ? AND mode LIKE ?
-        """,
-        (strategy_version, mode_filter),
-    )
+    counts = observation_counts(conn, strategy_version, mode_filter)
+    payload["observations"] = counts["distinct_market_days"]
+    payload["observations_raw"] = counts["raw"]
+    payload["observations_distinct_market_days"] = counts["distinct_market_days"]
     return payload
+
+
+def canonical_challenger_state(winner_candidate, shadow_candidate, promotion_candidate):
+    winner_candidate = (winner_candidate or "").strip()
+    shadow_candidate = (shadow_candidate or "").strip()
+    promotion_candidate = (promotion_candidate or "").strip()
+
+    if promotion_candidate and winner_candidate and promotion_candidate != winner_candidate:
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": promotion_candidate,
+            "sync_status": "promotion-stale",
+            "sync_reason": f"promotion report evaluated {promotion_candidate}, latest winner is {winner_candidate}",
+        }
+    if winner_candidate and shadow_candidate and winner_candidate != shadow_candidate:
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": winner_candidate,
+            "sync_status": "shadow-mismatch",
+            "sync_reason": f"latest shadow version {shadow_candidate} does not match latest winner {winner_candidate}",
+        }
+    if promotion_candidate and shadow_candidate and not winner_candidate and promotion_candidate != shadow_candidate:
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": promotion_candidate,
+            "sync_status": "shadow-mismatch",
+            "sync_reason": f"promotion candidate {promotion_candidate} does not match latest shadow {shadow_candidate}",
+        }
+    if winner_candidate and not shadow_candidate and not promotion_candidate:
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": winner_candidate,
+            "sync_status": "winner-only",
+            "sync_reason": "latest challenger exists only in winner artifact",
+        }
+    if promotion_candidate and not shadow_candidate and not winner_candidate:
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": promotion_candidate,
+            "sync_status": "promotion-only",
+            "sync_reason": "promotion report has a challenger but no winner/shadow challenger is available",
+        }
+    if shadow_candidate and not winner_candidate and not promotion_candidate:
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": shadow_candidate,
+            "sync_status": "shadow-only",
+            "sync_reason": "latest challenger exists only as shadow account state",
+        }
+    if winner_candidate or shadow_candidate or promotion_candidate:
+        canonical = promotion_candidate or winner_candidate or shadow_candidate
+        return {
+            "winner_candidate_version": winner_candidate,
+            "shadow_candidate_version": shadow_candidate,
+            "promotion_candidate_version": promotion_candidate,
+            "canonical_candidate_version": canonical,
+            "sync_status": "aligned",
+            "sync_reason": "winner, shadow, and promotion views are aligned or compatible",
+        }
+    return {
+        "winner_candidate_version": "",
+        "shadow_candidate_version": "",
+        "promotion_candidate_version": "",
+        "canonical_candidate_version": "",
+        "sync_status": "none",
+        "sync_reason": "no challenger candidate is currently available",
+    }
 
 
 def main():
@@ -142,6 +236,9 @@ def main():
         or promotion.get("candidate_version")
         or ""
     ).strip()
+    promotion_candidate = str(promotion.get("candidate_version") or "").strip()
+    shadow_candidate = str((latest_shadow or {}).get("strategy_version") or "").strip()
+
     winner_metrics = None
     if winner_candidate:
         winner_metrics = latest_row(
@@ -171,28 +268,20 @@ def main():
     shadow_winner_delta = equity_delta(winner_metrics, latest_shadow)
     shadow_winner_ratio = equity_ratio(winner_metrics, latest_shadow)
 
+    challenger_state = canonical_challenger_state(winner_candidate, shadow_candidate, promotion_candidate)
+
     gate_status = "missing"
     gate_reason = "promotion report missing"
     if promotion:
-        promotion_candidate = str(promotion.get("candidate_version") or "").strip()
-        if winner_candidate and promotion_candidate and promotion_candidate != winner_candidate:
+        if challenger_state["sync_status"] == "promotion-stale":
             gate_status = "stale"
-            gate_reason = f"promotion report evaluated {promotion_candidate}, latest winner is {winner_candidate}"
+            gate_reason = challenger_state["sync_reason"]
         elif bool(promotion.get("promoted")):
             gate_status = "promoted"
             gate_reason = str(promotion.get("reason") or "candidate promoted")
         else:
             gate_status = "blocked"
             gate_reason = str(promotion.get("reason") or "candidate did not pass promotion gate")
-
-    winner_sync = "unknown"
-    if winner_candidate:
-        if latest_shadow and latest_shadow.get("strategy_version") == winner_candidate:
-            winner_sync = "shadow-aligned"
-        elif latest_shadow:
-            winner_sync = "shadow-mismatch"
-        else:
-            winner_sync = "winner-only"
 
     payload = {
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(),
@@ -218,15 +307,17 @@ def main():
         "promotion_gate": {
             "status": gate_status,
             "reason": gate_reason,
-            "candidate_version": str(promotion.get("candidate_version") or winner_candidate or "").strip(),
+            "candidate_version": promotion_candidate or winner_candidate,
             "promoted": bool(promotion.get("promoted")) if promotion else False,
             "min_edge": safe_float(promotion.get("min_edge")) if promotion else None,
             "min_observations": safe_int(promotion.get("min_observations"), 0) if promotion else None,
+            "min_observations_basis": str(promotion.get("min_observations_basis") or "distinct_market_days") if promotion else None,
             "min_winner_rank": safe_int(promotion.get("min_winner_rank"), 0) if promotion else None,
             "min_winner_equity_delta": safe_float(promotion.get("min_winner_equity_delta")) if promotion else None,
             "min_winner_return_delta": safe_float(promotion.get("min_winner_return_delta")) if promotion else None,
         },
-        "winner_sync": winner_sync,
+        "winner_sync": challenger_state["sync_status"],
+        "challenger_state": challenger_state,
         "winner_batch": {
             "report_tag": winner_artifact.get("report_tag"),
             "experiment_id": winner_artifact.get("experiment_id"),
@@ -251,7 +342,9 @@ def main():
         format_delta("Shadow vs active", active_shadow_delta, active_shadow_ratio),
         format_delta("Winner vs active", active_winner_delta, active_winner_ratio),
         format_delta("Winner vs shadow", shadow_winner_delta, shadow_winner_ratio),
-        f"Winner sync: {winner_sync}",
+        f"Challenger sync: {challenger_state['sync_status']}",
+        f"Challenger reason: {challenger_state['sync_reason']}",
+        f"Canonical challenger: {challenger_state['canonical_candidate_version'] or 'n/a'}",
         "",
         f"Promotion gate: {gate_status}",
         f"Promotion reason: {gate_reason}",
@@ -264,7 +357,7 @@ def main():
         lines.append(
             "Promotion thresholds: "
             f"min_edge={safe_float(gate.get('min_edge')):.2f} "
-            f"min_observations={safe_int(gate.get('min_observations'), 0)} "
+            f"min_observations={safe_int(gate.get('min_observations'), 0)} ({gate.get('min_observations_basis')}) "
             f"winner_rank<={safe_int(gate.get('min_winner_rank'), 0)} "
             f"winner_equity_delta>={safe_float(gate.get('min_winner_equity_delta')):.2f} "
             f"winner_return_delta>={safe_float(gate.get('min_winner_return_delta')):.6f}"

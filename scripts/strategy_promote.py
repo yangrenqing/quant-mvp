@@ -14,7 +14,7 @@ def parse_args():
     parser.add_argument("--reports-dir", default="reports", help="Directory for promotion reports.")
     parser.add_argument("--winner-artifact", default="reports/paper_trial_winner_latest.json", help="Paper-trial winner artifact used to enrich promotion decisions.")
     parser.add_argument("--min-edge", type=float, default=0.0, help="Minimum required equity edge over active.")
-    parser.add_argument("--min-observations", type=int, default=1, help="Minimum paper metric observations required for the candidate.")
+    parser.add_argument("--min-observations", type=int, default=1, help="Minimum distinct market-day observations required for the candidate.")
     parser.add_argument("--min-winner-rank", type=int, default=1, help="Require the winner artifact rank to be at or above this threshold (1 means best rank only).")
     parser.add_argument("--min-winner-equity-delta", type=float, default=0.0, help="Minimum winner equity delta versus the previous batch.")
     parser.add_argument("--min-winner-return-delta", type=float, default=0.0, help="Minimum winner return delta versus the previous batch.")
@@ -24,8 +24,39 @@ def parse_args():
 
 
 def fetch_one(conn, query, params=()):
-    row = conn.execute(query, params).fetchone()
-    return row
+    return conn.execute(query, params).fetchone()
+
+
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def observation_counts(conn, strategy_version, mode_filter):
+    row = fetch_one(
+        conn,
+        """
+        SELECT COUNT(*), COUNT(DISTINCT market_date)
+        FROM paper_daily_metrics
+        WHERE strategy_version = ? AND mode LIKE ?
+        """,
+        (strategy_version, mode_filter),
+    )
+    if row is None:
+        return {"raw": 0, "distinct_market_days": 0}
+    return {
+        "raw": safe_int(row[0], 0),
+        "distinct_market_days": safe_int(row[1], 0),
+    }
 
 
 def fetch_metrics(conn, mode_filter, strategy_version):
@@ -42,16 +73,7 @@ def fetch_metrics(conn, mode_filter, strategy_version):
     )
     if row is None:
         return None
-    count_row = fetch_one(
-        conn,
-        """
-        SELECT COUNT(*)
-        FROM paper_daily_metrics
-        WHERE strategy_version = ? AND mode LIKE ?
-        """,
-        (strategy_version, mode_filter),
-    )
-    observations = count_row[0] if count_row is not None else 0
+    counts = observation_counts(conn, strategy_version, mode_filter)
     return {
         "strategy_version": row[0],
         "mode": row[1],
@@ -61,7 +83,9 @@ def fetch_metrics(conn, mode_filter, strategy_version):
         "holding_count": row[5],
         "order_count": row[6],
         "fill_count": row[7],
-        "observations": observations,
+        "observations": counts["distinct_market_days"],
+        "observations_raw": counts["raw"],
+        "observations_distinct_market_days": counts["distinct_market_days"],
     }
 
 
@@ -92,7 +116,7 @@ def write_report(reports_dir, summary):
         f"Dry run: {summary.get('dry_run')}",
         f"Reason: {summary.get('reason', '')}",
         f"Min edge: {summary.get('min_edge')}",
-        f"Min observations: {summary.get('min_observations')}",
+        f"Min observations: {summary.get('min_observations')} ({summary.get('min_observations_basis')})",
         f"Winner gate applied: {summary.get('winner_gate_applied')}",
         f"Min winner rank: {summary.get('min_winner_rank')}",
         f"Min winner equity delta: {summary.get('min_winner_equity_delta')}",
@@ -104,9 +128,21 @@ def write_report(reports_dir, summary):
     candidate_metrics = summary.get("candidate_metrics") or {}
     winner_artifact = summary.get("winner_artifact") or {}
     if active_metrics:
-        lines.append(f"Active metrics: date={active_metrics.get('market_date')} equity={active_metrics.get('equity')} observations={active_metrics.get('observations')}")
+        lines.append(
+            "Active metrics: "
+            f"date={active_metrics.get('market_date')} "
+            f"equity={active_metrics.get('equity')} "
+            f"obs_raw={active_metrics.get('observations_raw')} "
+            f"obs_distinct_days={active_metrics.get('observations_distinct_market_days')}"
+        )
     if candidate_metrics:
-        lines.append(f"Candidate metrics: date={candidate_metrics.get('market_date')} equity={candidate_metrics.get('equity')} observations={candidate_metrics.get('observations')}")
+        lines.append(
+            "Candidate metrics: "
+            f"date={candidate_metrics.get('market_date')} "
+            f"equity={candidate_metrics.get('equity')} "
+            f"obs_raw={candidate_metrics.get('observations_raw')} "
+            f"obs_distinct_days={candidate_metrics.get('observations_distinct_market_days')}"
+        )
     if winner_artifact:
         lines.append(
             f"Winner artifact: report={winner_artifact.get('report_tag')} experiment={winner_artifact.get('experiment_id')} "
@@ -126,6 +162,7 @@ def build_summary(args, market, active_version, candidate_version, active_metric
         "edge": edge,
         "min_edge": args.min_edge,
         "min_observations": args.min_observations,
+        "min_observations_basis": "distinct_market_days",
         "winner_gate_applied": winner_gate_applied,
         "min_winner_rank": args.min_winner_rank,
         "min_winner_equity_delta": args.min_winner_equity_delta,
@@ -230,7 +267,9 @@ def main():
         record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
-    if candidate_metrics["observations"] < args.min_observations:
+
+    candidate_observation_days = candidate_metrics["observations_distinct_market_days"]
+    if candidate_observation_days < args.min_observations:
         summary = build_summary(
             args,
             args.market,
@@ -241,16 +280,17 @@ def main():
             winner_artifact,
             None,
             False,
-            f"candidate observations {candidate_metrics['observations']} < {args.min_observations}",
+            f"candidate distinct market-day observations {candidate_observation_days} < {args.min_observations}",
             False,
         )
         write_report(args.reports_dir, summary)
         record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
+
     winner_gate_applied = bool(winner_artifact) and str(winner_artifact.get("candidate_version") or "").strip() == candidate_version
     if winner_gate_applied:
-        winner_rank = int(winner_artifact.get("rank") or 0)
+        winner_rank = safe_int(winner_artifact.get("rank"), 0)
         if args.min_winner_rank > 0 and winner_rank <= 0:
             summary = build_summary(
                 args,
@@ -287,9 +327,9 @@ def main():
             record_decision(conn, args.market, "skip", active["version_name"], candidate_version, summary["reason"], summary, args.dry_run)
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return
-        equity_delta = float(winner_artifact.get("equity_delta") or 0.0)
-        return_delta = float(winner_artifact.get("return_delta") or 0.0)
-        has_previous = bool(winner_artifact.get("previous_rank")) or abs(float(winner_artifact.get("previous_equity") or 0.0)) > 1e-9
+        equity_delta = safe_float(winner_artifact.get("equity_delta"), 0.0)
+        return_delta = safe_float(winner_artifact.get("return_delta"), 0.0)
+        has_previous = bool(winner_artifact.get("previous_rank")) or abs(safe_float(winner_artifact.get("previous_equity"), 0.0)) > 1e-9
         if has_previous and not args.allow_regressed_winner and equity_delta < args.min_winner_equity_delta:
             summary = build_summary(
                 args,
@@ -327,7 +367,7 @@ def main():
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return
 
-    edge = candidate_metrics["equity"] - active_metrics["equity"]
+    edge = safe_float(candidate_metrics["equity"]) - safe_float(active_metrics["equity"])
     promoted = edge >= args.min_edge
 
     summary = build_summary(
@@ -340,7 +380,7 @@ def main():
         winner_artifact,
         edge,
         promoted,
-        f"shadow equity edge {edge:.2f} {'>=' if promoted else '<'} min_edge {args.min_edge:.2f}",
+        f"shadow equity edge {edge:.2f} {'>=' if promoted else '<'} min_edge {args.min_edge:.2f}; distinct_days={candidate_observation_days}",
         winner_gate_applied,
     )
 

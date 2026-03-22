@@ -1,0 +1,38 @@
+{
+  "project": "quant-mvp",
+  "mode": "autopilot",
+  "status": "active",
+  "startedAt": "2026-03-22T19:10:00+08:00",
+  "repo": "/Users/yangrenqing/Downloads/quant-mvp",
+  "trackedDocs": [
+    "docs/cc_quant_autopilot.md",
+    "docs/branch_strategy.md",
+    "docs/now.md",
+    "docs/feature_log.md",
+    "docs/upgrade_log.jsonl",
+    "docs/autopilot_status.json"
+  ],
+  "resumeOrder": [
+    "docs/sprint_72h_plan.md",
+    "reports/sprint72_status.json",
+    "reports/sprint72_backlog.md",
+    "docs/cc_quant_autopilot.md",
+    "docs/now.md"
+  ],
+  "focus": [
+    "data trustworthiness",
+    "backtest trustworthiness",
+    "strategy comparison clarity",
+    "controlled evolution quality"
+  ],
+  "stopAndAskWhen": [
+    "destructive operation",
+    "external send/publish",
+    "major strategy-direction change",
+    "material habit/workflow change",
+    "real-money or external trading action"
+  ],
+  "lastSummary": "Autopilot mode enabled for quant-mvp internal continuous improvement; project tracking moved into git-visible docs.",
+  "nextAction": "Continue highest-leverage trust/evaluation improvements from sprint status.",
+  "updatedAt": "2026-03-22T21:10:00+08:00"
+}
