@@ -89,6 +89,7 @@ make show-check-paths
 make quick-check
 make verify
 make daily
+make trial
 ```
 
 `make show-start-here` is the quick companion to `make show-output-paths`: use it for the main entry paths plus grouped machine companions. Use `make show-output-paths` when you need the full path map, grouped views, and archive follow-up paths.
@@ -179,9 +180,33 @@ python3 scripts/health_monitor.py
 python3 scripts/factor_research.py --dataset reports/training_dataset.csv --label label_10d
 python3 scripts/factor_diagnostics.py --dataset reports/training_dataset.csv
 python3 scripts/model_comparison.py
+python3 scripts/strategy_compare.py
 python3 scripts/strategy_quality.py
 python3 scripts/research_summary.py
 ```
+
+Trial workflow:
+```bash
+cd /Users/yangrenqing/Downloads/quant-mvp
+bash scripts/trial_run.sh --trial-count 100 --trial-prefix exp-20260322
+```
+
+`scripts/trial_run.sh` runs the daily full chain first, then executes `--paper-trial-run` as a deterministic experiment grid. By default it uses `100000` initial cash and generates `100` parameter variants; with shadow enabled, the same grid is also run against the shadow strategy. It writes the latest ranking/comparison outputs to:
+- `reports/paper_trials_latest.txt`
+- `reports/paper_trials_latest.html`
+- `reports/paper_trials_latest.csv`
+- `reports/paper_trials_latest.json`
+- `reports/paper_trial_winner_latest.txt`
+- `reports/paper_trial_winner_latest.json`
+
+Each new run automatically compares against the previous `paper_trials_latest` batch and records rank / equity deltas per experiment. It also registers the winning live experiment as a shadow-ready strategy version, so later daily / weekly / intraday workflows will default shadow paper trading to the latest `paper_trial_winner_latest` candidate unless `--shadow-version` or `SHADOW_VERSION` overrides it. Use a new `--trial-prefix` / `--trial-report-tag` on each optimization round so run history and archive snapshots stay easy to compare.
+
+The full chain now also emits:
+- `reports/strategy_compare_latest.txt`
+- `reports/strategy_compare_latest.html`
+- `reports/strategy_compare_latest.json`
+
+This report keeps `active` vs `latest shadow` vs `latest trial winner` in one place and includes the current promotion gate decision. Automatic promotion now keeps a floor of at least `3` shadow observations before switching the active strategy, even if the base config is looser.
 
 Research workspace:
 ```bash
@@ -195,6 +220,8 @@ cd /Users/yangrenqing/Downloads/quant-mvp
 bash scripts/install_launchd.sh
 launchctl list | rg quant-mvp
 ```
+
+`scripts/install_launchd.sh` installs only the supported `com.yangrenqing.quant-mvp.*` jobs and also removes the old broken `com.yangrenqing.openclaw.quant-mvp.night-shift` plist if it is still present in `~/Library/LaunchAgents`.
 
 Night shift automation:
 - `com.yangrenqing.quant-mvp.night-shift` wakes every 10 minutes

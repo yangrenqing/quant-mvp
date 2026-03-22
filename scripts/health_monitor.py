@@ -12,6 +12,17 @@ REPORTS = ROOT / "reports"
 DB_PATH = ROOT / "data" / "quant.db"
 RUNTIME_CONFIG = REPORTS / "runtime_config.json"
 
+
+def load_json(name):
+    path = REPORTS / name
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
 def runtime_health_config() -> dict:
     if not RUNTIME_CONFIG.exists():
         return {}
@@ -64,11 +75,19 @@ def main() -> int:
     latest_live = latest_row(conn, "SELECT strategy_version, market_date, equity, order_count FROM paper_daily_metrics WHERE mode = 'live' ORDER BY id DESC LIMIT 1;")
     latest_shadow = latest_row(conn, "SELECT strategy_version, market_date, equity, order_count FROM paper_daily_metrics WHERE mode LIKE 'shadow:%' ORDER BY id DESC LIMIT 1;")
     latest_promotion = latest_row(conn, "SELECT event_type, from_version, to_version, trigger_reason, recorded_at FROM strategy_promotions ORDER BY id DESC LIMIT 1;")
+    winner_artifact = {}
+    winner_path = REPORTS / "paper_trial_winner_latest.json"
+    if winner_path.exists():
+        try:
+            winner_artifact = json.loads(winner_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            winner_artifact = {}
 
     diagnostics_path = REPORTS / "diagnostics.json"
     diagnostics = {}
     if diagnostics_path.exists():
         diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    strategy_compare = load_json("strategy_compare_latest.json")
 
     provider_failures = diagnostics.get("ProviderFailures") or diagnostics.get("provider_failures") or {}
     provider_failure_total = int(sum(provider_failures.values())) if isinstance(provider_failures, dict) else 0
@@ -99,6 +118,15 @@ def main() -> int:
             warnings.append(f"shadow is ahead of active by {diff_ratio:.2%}")
         if active_equity < 100000 * min_active_equity_ratio:
             warnings.append(f"active equity ratio fell below {min_active_equity_ratio:.2f}")
+    if winner_artifact:
+        winner_candidate = str(winner_artifact.get("candidate_version") or "")
+        winner_equity_delta = float(winner_artifact.get("equity_delta") or 0.0)
+        winner_return_delta = float(winner_artifact.get("return_delta") or 0.0)
+        latest_shadow_version = str(latest_shadow["strategy_version"]) if latest_shadow else ""
+        if winner_candidate and latest_shadow_version and winner_candidate != latest_shadow_version:
+            warnings.append(f"latest shadow version {latest_shadow_version} is not using winner {winner_candidate}")
+        if winner_equity_delta < 0 or winner_return_delta < 0:
+            warnings.append(f"winner regressed vs previous batch: equity_delta={winner_equity_delta:.2f} return_delta={winner_return_delta:.4f}")
 
     if provider_failure_total >= provider_failure_alert_count:
         warnings.append(f"provider failures observed: {provider_failure_total}")
@@ -125,6 +153,8 @@ def main() -> int:
         "latest_live": dict(latest_live) if latest_live else None,
         "latest_shadow": dict(latest_shadow) if latest_shadow else None,
         "latest_promotion": dict(latest_promotion) if latest_promotion else None,
+        "winner_artifact": winner_artifact or None,
+        "strategy_compare": strategy_compare or None,
         "last_run_age_hours": last_run_age_hours,
         "provider_failure_total": provider_failure_total,
         "alerts": alerts,
@@ -146,6 +176,13 @@ def main() -> int:
         f"Latest run: {latest_run['run_type']} @ {latest_run['generated_at']}" if latest_run else "Latest run: none",
         f"Active equity: {float(latest_live['equity']):.2f}" if latest_live else "Active equity: n/a",
         f"Shadow equity: {float(latest_shadow['equity']):.2f}" if latest_shadow else "Shadow equity: n/a",
+        f"Winner candidate: {winner_artifact.get('candidate_version')}" if winner_artifact else "Winner candidate: n/a",
+        (
+            f"Promotion gate: {(strategy_compare.get('promotion_gate') or {}).get('status', 'n/a')} "
+            f"({(strategy_compare.get('promotion_gate') or {}).get('reason', 'n/a')})"
+            if strategy_compare
+            else "Promotion gate: n/a"
+        ),
         f"Provider failures: {provider_failure_total}",
         "",
         "Alerts:",

@@ -35,7 +35,7 @@ LAYERED_CONFIG_FINAL_OVERRIDE ?= configs/local.yaml
 LAYERED_CONFIG_PRESENT ?= $(filter $(wildcard $(LAYERED_CONFIG_LOAD_ORDER)),$(LAYERED_CONFIG_LOAD_ORDER))
 LAYERED_CONFIG_ABSENT ?= $(filter-out $(LAYERED_CONFIG_PRESENT),$(LAYERED_CONFIG_LOAD_ORDER))
 LAYERED_CONFIG_INPUTS ?= $(LAYERED_CONFIG_LOAD_ORDER) $(LAYERED_CONFIG_FINAL_OVERRIDE)
-QUICK_CHECK_SHELL_SCRIPTS ?= scripts/daily_run.sh scripts/weekly_run.sh scripts/intraday_run.sh scripts/research_run.sh scripts/night_shift_run.sh
+QUICK_CHECK_SHELL_SCRIPTS ?= scripts/daily_run.sh scripts/weekly_run.sh scripts/intraday_run.sh scripts/research_run.sh scripts/night_shift_run.sh scripts/trial_run.sh
 QUICK_CHECK_STEPS ?= shell syntax, py_compile, and validate-config
 VERIFY_STEPS ?= Go tests plus make quick-check
 VALIDATE_CONFIG_FOLLOW_UP ?= console output from $(SCHEDULER_CMD) --validate-config
@@ -125,16 +125,19 @@ WORKFLOW_STRUCTURED_REVIEW_PATHS ?= $(DATASET_MACHINE_OUTPUT_PATHS) $(MODEL_MACH
 FROM ?= 2025-01-01
 TO ?= $(shell date +%F)
 TOP ?= 10
+TRIAL_COUNT ?= 100
+TRIAL_PREFIX ?= trial-$(shell date +%Y%m%d-%H%M%S)
 
 export GOCACHE PYTHONPYCACHEPREFIX
 
-.PHONY: help scan portfolio dataset model show-start-here show-output-paths validate-config export-runtime-config show-check-paths quick-check daily verify
+.PHONY: help scan portfolio dataset model trial show-start-here show-output-paths validate-config export-runtime-config show-check-paths quick-check daily verify
 
 help:
 	@echo "make scan       # run A-share scan"
 	@echo "make portfolio  # run portfolio backtest"
 	@echo "make dataset    # export training dataset"
 	@echo "make model      # run model pipeline"
+	@echo "make trial      # run full-chain experiment grid plus previous-round comparison"
 	@echo "make show-start-here # quick entry paths + grouped machine companions"
 	@echo "make show-output-paths # full path map with grouped and archive details"
 	@echo "make validate-config # only validate layered runtime config"
@@ -156,6 +159,9 @@ dataset:
 
 model:
 	$(PYTHON) scripts/model_pipeline.py --from $(FROM) --to $(TO) --label label_10d
+
+trial:
+	bash scripts/trial_run.sh --from $(FROM) --to $(TO) --top 3 --cash 100000 --fee-bps 10 --slippage-bps 5 --trial-count $(TRIAL_COUNT) --trial-prefix $(TRIAL_PREFIX)
 
 show-start-here:
 	@print_paths() { \

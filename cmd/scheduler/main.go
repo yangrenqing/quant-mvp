@@ -255,6 +255,116 @@ type paperAccountResult struct {
 	Note       string
 }
 
+type paperTrialAccountSummary struct {
+	AccountID        int
+	Group            string
+	ExperimentID     string
+	Mode             string
+	Strategy         string
+	MarketDate       string
+	TopN             int
+	ShortWindow      int
+	LongWindow       int
+	FeeBps           float64
+	SlippageBps      float64
+	ParameterSummary string
+	Cash             float64
+	Equity           float64
+	Return           float64
+	Holdings         int
+	Orders           int
+	Targets          int
+	Rank             int
+	PreviousRank     int
+	RankDelta        int
+	PreviousEquity   float64
+	EquityDelta      float64
+	PreviousReturn   float64
+	ReturnDelta      float64
+	Note             string
+}
+
+type paperTrialGroupSummary struct {
+	Group          string
+	AccountCount   int
+	AverageEquity  float64
+	AverageReturn  float64
+	BestMode       string
+	BestEquity     float64
+	WorstMode      string
+	WorstEquity    float64
+	ImprovedCount  int
+	RegressedCount int
+	NewCount       int
+}
+
+type paperTrialBatchResult struct {
+	ReportTag           string
+	TrialPrefix         string
+	GeneratedAt         string
+	Market              string
+	InitialCash         float64
+	TrialCount          int
+	IncludeShadow       bool
+	ActiveVersion       string
+	ShadowVersion       string
+	PreviousReportTag   string
+	PreviousGeneratedAt string
+	Accounts            []paperTrialAccountSummary
+	Groups              []paperTrialGroupSummary
+	TemplateNotes       []string
+	AverageEquity       float64
+	AverageReturn       float64
+	BestMode            string
+	BestEquity          float64
+	WorstMode           string
+	WorstEquity         float64
+	ImprovedCount       int
+	RegressedCount      int
+	NewCount            int
+	UnchangedCount      int
+	ComparisonSummary   string
+	variantConfigs      map[string]config
+}
+
+type paperExperimentSpec struct {
+	ID               string
+	TopN             int
+	Strategy         strategyConfig
+	Portfolio        portfolioConfig
+	FeeBps           float64
+	SlippageBps      float64
+	ParameterSummary string
+}
+
+type paperTrialWinnerArtifact struct {
+	ReportTag        string  `json:"report_tag"`
+	TrialPrefix      string  `json:"trial_prefix"`
+	GeneratedAt      string  `json:"generated_at"`
+	Market           string  `json:"market"`
+	SourceMode       string  `json:"source_mode"`
+	SourceGroup      string  `json:"source_group"`
+	ExperimentID     string  `json:"experiment_id"`
+	StrategyVersion  string  `json:"strategy_version"`
+	CandidateVersion string  `json:"candidate_version"`
+	ParameterSummary string  `json:"parameter_summary"`
+	Equity           float64 `json:"equity"`
+	Return           float64 `json:"return"`
+	Rank             int     `json:"rank"`
+	PreviousRank     int     `json:"previous_rank"`
+	RankDelta        int     `json:"rank_delta"`
+	PreviousEquity   float64 `json:"previous_equity"`
+	EquityDelta      float64 `json:"equity_delta"`
+	PreviousReturn   float64 `json:"previous_return"`
+	ReturnDelta      float64 `json:"return_delta"`
+	TopN             int     `json:"top_n"`
+	ShortWindow      int     `json:"short_window"`
+	LongWindow       int     `json:"long_window"`
+	FeeBps           float64 `json:"fee_bps"`
+	SlippageBps      float64 `json:"slippage_bps"`
+	Config           config  `json:"config"`
+}
+
 type portfolioBacktestResult struct {
 	FromDate         string
 	ToDate           string
@@ -396,6 +506,7 @@ func main() {
 	portfolioBacktest := flag.Bool("portfolio-backtest", false, "Run a portfolio backtest across the local A-share universe")
 	paperRun := flag.Bool("paper-run", false, "Run the simulated paper-trading account")
 	paperShadowRun := flag.Bool("paper-shadow-run", false, "Run a shadow paper-trading account")
+	paperTrialRun := flag.Bool("paper-trial-run", false, "Run a deterministic paper-trading experiment grid and write ranking/comparison reports")
 	gridSearch := flag.Bool("grid-search", false, "Run a portfolio parameter grid search across short/long windows")
 	exportDataset := flag.Bool("export-dataset", false, "Export a training dataset with factor features and forward-return labels")
 	dashboardOnly := flag.Bool("dashboard-only", false, "Rebuild dashboard and overview reports from the latest report files")
@@ -416,6 +527,10 @@ func main() {
 	paperMarket := flag.String("paper-market", "a_share", "Paper-trading market")
 	paperMode := flag.String("paper-mode", "live", "Paper-trading mode")
 	shadowVersion := flag.String("shadow-version", "", "Shadow strategy version name")
+	trialCount := flag.Int("trial-count", 1, "Number of deterministic experiment variants to generate")
+	trialPrefix := flag.String("trial-prefix", "", "Mode prefix used to group one experiment batch")
+	trialReportTag := flag.String("trial-report-tag", "", "Report tag for the experiment ranking/comparison output")
+	trialIncludeShadow := flag.Bool("trial-include-shadow", false, "Also run the same experiment grid against the shadow strategy")
 	pythonBin := flag.String("python-bin", envOrDefault("PYTHON_BIN", "python3"), "Python interpreter path for workflow execution")
 	flag.Parse()
 
@@ -556,10 +671,7 @@ func main() {
 		}
 	}
 	if *paperShadowRun {
-		versionName := strings.TrimSpace(*shadowVersion)
-		if versionName == "" {
-			versionName = currentStrategyVersionName(cfg) + "_shadow"
-		}
+		versionName := resolveShadowVersionName(strings.TrimSpace(*shadowVersion), currentStrategyVersionName(cfg)+"_shadow")
 		if err := ensureStrategyVersion(runtimeConfig.DB.Path, "a_share", versionName, "shadow", currentStrategyVersionName(cfg), runtimeConfig); err != nil {
 			logger.Fatalf("ensure shadow strategy version: %v", err)
 		}
@@ -593,6 +705,54 @@ func main() {
 			time.Sleep(interval)
 			runCycle()
 		}
+	}
+	if *paperTrialRun {
+		if *trialCount <= 0 {
+			logger.Fatalf("trial-count must be positive")
+		}
+
+		prefix := sanitizeReportToken(firstNonEmpty(strings.TrimSpace(*trialPrefix), time.Now().Format("20060102_150405")))
+		reportTag := sanitizeReportToken(firstNonEmpty(strings.TrimSpace(*trialReportTag), prefix))
+		activeCfg, activeVersion, err := resolveActiveStrategyConfig(runtimeConfig, *paperMarket)
+		if err != nil {
+			logger.Fatalf("resolve active strategy config: %v", err)
+		}
+
+		shadowVersionName := resolveShadowVersionName(strings.TrimSpace(*shadowVersion), runtimeConfig.Model.ShadowVersion)
+		var shadowCfg config
+		if *trialIncludeShadow {
+			if err := ensureStrategyVersion(runtimeConfig.DB.Path, "a_share", shadowVersionName, "shadow", currentStrategyVersionName(cfg), runtimeConfig); err != nil {
+				logger.Fatalf("ensure shadow strategy version: %v", err)
+			}
+			shadowCfg, err = loadStrategyVersionConfig(runtimeConfig.DB.Path, shadowVersionName, runtimeConfig)
+			if err != nil {
+				logger.Fatalf("load shadow strategy config: %v", err)
+			}
+		}
+
+		result, err := runPaperTrialBatch(
+			activeCfg,
+			activeVersion,
+			shadowCfg,
+			shadowVersionName,
+			*trialIncludeShadow,
+			*topN,
+			*trialCount,
+			prefix,
+			reportTag,
+			*initialCash,
+			*feeBps,
+			*slippageBps,
+			*paperMarket,
+		)
+		if err != nil {
+			logger.Fatalf("paper trial run failed: %v", err)
+		}
+		if err := writePaperTrialReports(result); err != nil {
+			logger.Fatalf("write paper trial reports: %v", err)
+		}
+		printPaperTrialSummary(result)
+		return
 	}
 	if *gridSearch {
 		if *fromDate == "" || *toDate == "" {
@@ -689,7 +849,8 @@ func runDailyWorkflow(pythonBin string, fromDate string, toDate string, topN int
 	fromDate = firstNonEmpty(fromDate, os.Getenv("FROM_DATE"), "2025-01-01")
 	toDate = firstNonEmpty(toDate, os.Getenv("TO_DATE"), time.Now().Format("2006-01-02"))
 	modelLabel := firstNonEmpty(os.Getenv("MODEL_LABEL"), runtimeConfig.Model.DefaultLabel, "label_10d")
-	shadowVersion = firstNonEmpty(shadowVersion, os.Getenv("SHADOW_VERSION"), runtimeConfig.Model.ShadowVersion)
+	shadowVersion = resolveShadowVersionName(shadowVersion, runtimeConfig.Model.ShadowVersion)
+	minPromotionObservations := max(runtimeConfig.Model.MinShadowObservations, 3)
 	if topN <= 0 {
 		topN = 10
 	}
@@ -721,7 +882,7 @@ func runDailyWorkflow(pythonBin string, fromDate string, toDate string, topN int
 		}
 	}
 	if !envBool("SKIP_PROMOTION") {
-		if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(runtimeConfig.Model.MinShadowObservations)); err != nil {
+		if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(minPromotionObservations)); err != nil {
 			return err
 		}
 	}
@@ -733,8 +894,6 @@ func runDailyWorkflow(pythonBin string, fromDate string, toDate string, topN int
 			{"scripts/factor_research.py", "--dataset", "reports/training_dataset.csv", "--label", modelLabel},
 			{"scripts/factor_diagnostics.py", "--dataset", "reports/training_dataset.csv"},
 			{"scripts/model_comparison.py"},
-			{"scripts/strategy_quality.py"},
-			{"scripts/research_summary.py"},
 		} {
 			if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
 				return err
@@ -757,6 +916,15 @@ func runDailyWorkflow(pythonBin string, fromDate string, toDate string, topN int
 			}
 		}
 	}
+	for _, args := range [][]string{
+		{"scripts/strategy_compare.py"},
+		{"scripts/strategy_quality.py"},
+		{"scripts/research_summary.py"},
+	} {
+		if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+			return err
+		}
+	}
 	return runSelf("--dashboard-only")
 }
 
@@ -764,7 +932,8 @@ func runWeeklyWorkflow(pythonBin string, fromDate string, toDate string, topN in
 	fromDate = firstNonEmpty(fromDate, os.Getenv("FROM_DATE"), "2025-01-01")
 	toDate = firstNonEmpty(toDate, os.Getenv("TO_DATE"), time.Now().Format("2006-01-02"))
 	modelLabel := firstNonEmpty(os.Getenv("MODEL_LABEL"), runtimeConfig.Model.DefaultLabel, "label_10d")
-	shadowVersion = firstNonEmpty(shadowVersion, os.Getenv("SHADOW_VERSION"), runtimeConfig.Model.ShadowVersion)
+	shadowVersion = resolveShadowVersionName(shadowVersion, runtimeConfig.Model.ShadowVersion)
+	minPromotionObservations := max(runtimeConfig.Model.MinShadowObservations, 3)
 
 	if err := runResearchWorkflow(); err != nil {
 		return err
@@ -781,8 +950,6 @@ func runWeeklyWorkflow(pythonBin string, fromDate string, toDate string, topN in
 		{"scripts/factor_research.py", "--dataset", "reports/training_dataset.csv", "--label", modelLabel},
 		{"scripts/factor_diagnostics.py", "--dataset", "reports/training_dataset.csv"},
 		{"scripts/model_comparison.py"},
-		{"scripts/strategy_quality.py"},
-		{"scripts/research_summary.py"},
 	} {
 		if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
 			return err
@@ -791,7 +958,7 @@ func runWeeklyWorkflow(pythonBin string, fromDate string, toDate string, topN in
 	if err := runSelf("--paper-shadow-run", "--once", "--shadow-version", shadowVersion, "--top", "3", "--cash", fmt.Sprintf("%.0f", initialCash), "--fee-bps", fmt.Sprintf("%.2f", feeBps), "--slippage-bps", fmt.Sprintf("%.2f", slippageBps)); err != nil {
 		return err
 	}
-	if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(runtimeConfig.Model.MinShadowObservations)); err != nil {
+	if err := runPythonScript(pythonBin, "scripts/strategy_promote.py", "--candidate", shadowVersion, "--min-edge", fmt.Sprintf("%.6f", runtimeConfig.Model.MinPromotionEdge), "--min-observations", strconv.Itoa(minPromotionObservations)); err != nil {
 		return err
 	}
 	if !envBool("SKIP_ROLLBACK") {
@@ -815,6 +982,15 @@ func runWeeklyWorkflow(pythonBin string, fromDate string, toDate string, topN in
 			}
 		}
 	}
+	for _, args := range [][]string{
+		{"scripts/strategy_compare.py"},
+		{"scripts/strategy_quality.py"},
+		{"scripts/research_summary.py"},
+	} {
+		if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
+			return err
+		}
+	}
 	return runSelf("--dashboard-only")
 }
 
@@ -822,7 +998,7 @@ func runIntradayWorkflow(pythonBin string, topN int, initialCash float64, feeBps
 	if topN <= 0 {
 		topN = 3
 	}
-	shadowVersion = firstNonEmpty(shadowVersion, os.Getenv("SHADOW_VERSION"), runtimeConfig.Model.ShadowVersion)
+	shadowVersion = resolveShadowVersionName(shadowVersion, runtimeConfig.Model.ShadowVersion)
 	if !envBool("FORCE_RUN") && !isAShareMarketOpen(time.Now()) {
 		return runPythonScript(pythonBin, "scripts/health_monitor.py", "--source", "intraday")
 	}
@@ -839,6 +1015,7 @@ func runIntradayWorkflow(pythonBin string, topN int, initialCash float64, feeBps
 		{"scripts/evolution_report.py", "--hours", "24"},
 		{"scripts/evolution_report.py", "--preset", "overnight"},
 		{"scripts/runtime_report.py"},
+		{"scripts/strategy_compare.py"},
 	} {
 		if err := runPythonScript(pythonBin, args[0], args[1:]...); err != nil {
 			return err
@@ -1685,6 +1862,271 @@ func runPaperTrading(strategy strategyConfig, portfolio portfolioConfig, regime 
 		Fills:      fills,
 		Note:       finalNote,
 	}, nil
+}
+
+func runPaperTrialBatch(activeCfg config, activeVersion string, shadowCfg config, shadowVersion string, includeShadow bool, topN int, trialCount int, trialPrefix string, reportTag string, initialCash float64, feeBps float64, slippageBps float64, market string) (paperTrialBatchResult, error) {
+	if trialCount <= 0 {
+		return paperTrialBatchResult{}, errors.New("trial count must be positive")
+	}
+	trialPrefix = sanitizeReportToken(trialPrefix)
+	reportTag = sanitizeReportToken(reportTag)
+
+	specs := generatePaperExperimentSpecs(activeCfg, trialCount, topN, feeBps, slippageBps)
+	results := make([]paperTrialAccountSummary, 0, len(specs)*2)
+	variantConfigs := make(map[string]config, len(specs)*2)
+	templateNotes := []string{
+		fmt.Sprintf("generated %d deterministic experiment variants from the active configuration", len(specs)),
+	}
+	if includeShadow {
+		templateNotes = append(templateNotes, fmt.Sprintf("each experiment is executed for both live and shadow (%s) so model changes can be compared under the same parameter grid", shadowVersion))
+	}
+
+	for _, spec := range specs {
+		activeVariant := applyPaperExperimentSpec(activeCfg, spec)
+		activeMode := buildTrialMode(trialPrefix, spec.ID)
+		activeResult, err := runPaperTrading(activeVariant.Strategy, activeVariant.Portfolio, activeVariant.Regime, spec.TopN, initialCash, spec.FeeBps, spec.SlippageBps, market, activeMode, activeVersion)
+		if err != nil {
+			return paperTrialBatchResult{}, err
+		}
+		variantConfigs[activeMode] = activeVariant
+		results = append(results, summarizePaperTrialAccount(activeResult, initialCash, spec))
+
+		if includeShadow {
+			shadowVariant := applyPaperExperimentSpec(shadowCfg, spec)
+			shadowMode := buildTrialShadowMode(shadowVersion, trialPrefix, spec.ID)
+			shadowResult, err := runPaperTrading(shadowVariant.Strategy, shadowVariant.Portfolio, shadowVariant.Regime, spec.TopN, initialCash, spec.FeeBps, spec.SlippageBps, market, shadowMode, shadowVersion)
+			if err != nil {
+				return paperTrialBatchResult{}, err
+			}
+			variantConfigs[shadowMode] = shadowVariant
+			results = append(results, summarizePaperTrialAccount(shadowResult, initialCash, spec))
+		}
+	}
+
+	rankPaperTrialAccounts(results)
+	groups, averageEquity, averageReturn, bestMode, bestEquity, worstMode, worstEquity := summarizePaperTrialGroups(results)
+	return paperTrialBatchResult{
+		ReportTag:      reportTag,
+		TrialPrefix:    trialPrefix,
+		GeneratedAt:    time.Now().Format(time.RFC3339),
+		Market:         market,
+		InitialCash:    initialCash,
+		TrialCount:     trialCount,
+		IncludeShadow:  includeShadow,
+		ActiveVersion:  activeVersion,
+		ShadowVersion:  shadowVersion,
+		Accounts:       results,
+		Groups:         groups,
+		TemplateNotes:  templateNotes,
+		AverageEquity:  averageEquity,
+		AverageReturn:  averageReturn,
+		BestMode:       bestMode,
+		BestEquity:     bestEquity,
+		WorstMode:      worstMode,
+		WorstEquity:    worstEquity,
+		variantConfigs: variantConfigs,
+	}, nil
+}
+
+func generatePaperExperimentSpecs(base config, trialCount int, defaultTopN int, baseFeeBps float64, baseSlippageBps float64) []paperExperimentSpec {
+	topNs := []int{1, 2, 3, 4, 5}
+	if defaultTopN > 0 {
+		topNs[0] = defaultTopN
+	}
+	qualityMultipliers := []float64{0.80, 0.95, 1.00, 1.10, 1.25}
+	riskMultipliers := []float64{0.75, 0.90, 1.05, 1.20}
+	cashShares := []float64{0.20, 0.30, 0.35, 0.45}
+	positionWeights := []float64{0.20, 0.25, 0.30, 0.35, 0.40}
+	minBacktestExcesses := []float64{-0.30, -0.20, -0.10, 0.00}
+	heatMultipliers := []float64{0.80, 1.00, 1.20, 1.35}
+	feeMultipliers := []float64{0.50, 1.00, 1.50, 2.00}
+	slippageMultipliers := []float64{0.50, 1.00, 1.50, 2.00, 2.50}
+	shortShifts := []int{-2, -1, 0, 1, 2}
+	longShifts := []int{-3, -1, 0, 2, 4}
+
+	specs := make([]paperExperimentSpec, 0, trialCount)
+	index := 0
+	for _, top := range topNs {
+		for _, qMul := range qualityMultipliers {
+			for _, rMul := range riskMultipliers {
+				index++
+				spec := paperExperimentSpec{
+					ID:          fmt.Sprintf("exp%03d", index),
+					TopN:        top,
+					Strategy:    base.Strategy,
+					Portfolio:   base.Portfolio,
+					FeeBps:      clampFloat(baseFeeBps*feeMultipliers[(index-1)%len(feeMultipliers)], 1, 50),
+					SlippageBps: clampFloat(baseSlippageBps*slippageMultipliers[(index-1)%len(slippageMultipliers)], 1, 50),
+				}
+				spec.Strategy.ShortWindow = max(3, base.Strategy.ShortWindow+shortShifts[(index-1)%len(shortShifts)])
+				spec.Strategy.LongWindow = max(spec.Strategy.ShortWindow+2, base.Strategy.LongWindow+longShifts[(index-1)%len(longShifts)])
+				spec.Portfolio.QualityWeight = clampFloat(base.Portfolio.QualityWeight*qMul, 0.30, 3.00)
+				spec.Portfolio.RiskWeight = clampFloat(base.Portfolio.RiskWeight*rMul, 0.30, 3.00)
+				spec.Portfolio.MaxCashShare = cashShares[(index-1)%len(cashShares)]
+				spec.Portfolio.MaxPositionWeight = positionWeights[(index-1)%len(positionWeights)]
+				spec.Portfolio.MinBacktestExcess = minBacktestExcesses[(index-1)%len(minBacktestExcesses)]
+				spec.Portfolio.HeatPenaltyWeight = clampFloat(base.Portfolio.HeatPenaltyWeight*heatMultipliers[(index-1)%len(heatMultipliers)], 0.20, 3.00)
+				spec.ParameterSummary = fmt.Sprintf(
+					"top=%d short/long=%d/%d quality_w=%.2f risk_w=%.2f cash_share=%.2f max_pos=%.2f min_excess=%.2f heat_w=%.2f fee=%.1f slip=%.1f",
+					spec.TopN,
+					spec.Strategy.ShortWindow,
+					spec.Strategy.LongWindow,
+					spec.Portfolio.QualityWeight,
+					spec.Portfolio.RiskWeight,
+					spec.Portfolio.MaxCashShare,
+					spec.Portfolio.MaxPositionWeight,
+					spec.Portfolio.MinBacktestExcess,
+					spec.Portfolio.HeatPenaltyWeight,
+					spec.FeeBps,
+					spec.SlippageBps,
+				)
+				specs = append(specs, spec)
+				if len(specs) >= trialCount {
+					return specs
+				}
+			}
+		}
+	}
+	return specs
+}
+
+func applyPaperExperimentSpec(base config, spec paperExperimentSpec) config {
+	variant := base
+	variant.Strategy = spec.Strategy
+	variant.Portfolio = spec.Portfolio
+	return variant
+}
+
+func summarizePaperTrialAccount(result paperAccountResult, initialCash float64, spec paperExperimentSpec) paperTrialAccountSummary {
+	return paperTrialAccountSummary{
+		AccountID:        result.AccountID,
+		Group:            paperTrialGroup(result.Mode),
+		ExperimentID:     spec.ID,
+		Mode:             result.Mode,
+		Strategy:         result.Version,
+		MarketDate:       result.MarketDate,
+		TopN:             spec.TopN,
+		ShortWindow:      spec.Strategy.ShortWindow,
+		LongWindow:       spec.Strategy.LongWindow,
+		FeeBps:           spec.FeeBps,
+		SlippageBps:      spec.SlippageBps,
+		ParameterSummary: spec.ParameterSummary,
+		Cash:             result.Cash,
+		Equity:           result.Equity,
+		Return:           (result.Equity - initialCash) / initialCash,
+		Holdings:         len(result.Holdings),
+		Orders:           len(result.Orders),
+		Targets:          len(result.Targets),
+		Note:             result.Note,
+	}
+}
+
+func summarizePaperTrialGroups(accounts []paperTrialAccountSummary) ([]paperTrialGroupSummary, float64, float64, string, float64, string, float64) {
+	grouped := make(map[string][]paperTrialAccountSummary)
+	equities := make([]float64, 0, len(accounts))
+	returns := make([]float64, 0, len(accounts))
+	bestMode := ""
+	bestEquity := 0.0
+	worstMode := ""
+	worstEquity := 0.0
+	for i, account := range accounts {
+		grouped[account.Group] = append(grouped[account.Group], account)
+		equities = append(equities, account.Equity)
+		returns = append(returns, account.Return)
+		if i == 0 || account.Equity > bestEquity {
+			bestMode = account.Mode
+			bestEquity = account.Equity
+		}
+		if i == 0 || account.Equity < worstEquity {
+			worstMode = account.Mode
+			worstEquity = account.Equity
+		}
+	}
+
+	groupNames := make([]string, 0, len(grouped))
+	for group := range grouped {
+		groupNames = append(groupNames, group)
+	}
+	sort.Strings(groupNames)
+
+	summaries := make([]paperTrialGroupSummary, 0, len(groupNames))
+	for _, group := range groupNames {
+		items := grouped[group]
+		groupEquities := make([]float64, 0, len(items))
+		groupReturns := make([]float64, 0, len(items))
+		best := items[0]
+		worst := items[0]
+		for _, item := range items {
+			groupEquities = append(groupEquities, item.Equity)
+			groupReturns = append(groupReturns, item.Return)
+			if item.Equity > best.Equity {
+				best = item
+			}
+			if item.Equity < worst.Equity {
+				worst = item
+			}
+		}
+		summaries = append(summaries, paperTrialGroupSummary{
+			Group:          group,
+			AccountCount:   len(items),
+			AverageEquity:  average(groupEquities),
+			AverageReturn:  average(groupReturns),
+			BestMode:       best.Mode,
+			BestEquity:     best.Equity,
+			WorstMode:      worst.Mode,
+			WorstEquity:    worst.Equity,
+			ImprovedCount:  countPaperTrialMatches(items, func(item paperTrialAccountSummary) bool { return item.EquityDelta > 0 }),
+			RegressedCount: countPaperTrialMatches(items, func(item paperTrialAccountSummary) bool { return item.EquityDelta < 0 }),
+			NewCount: countPaperTrialMatches(items, func(item paperTrialAccountSummary) bool {
+				return item.PreviousRank == 0 && item.PreviousEquity == 0 && item.PreviousReturn == 0
+			}),
+		})
+	}
+
+	return summaries, average(equities), average(returns), bestMode, bestEquity, worstMode, worstEquity
+}
+
+func rankPaperTrialAccounts(accounts []paperTrialAccountSummary) {
+	sort.Slice(accounts, func(i, j int) bool {
+		if accounts[i].Equity != accounts[j].Equity {
+			return accounts[i].Equity > accounts[j].Equity
+		}
+		if accounts[i].Return != accounts[j].Return {
+			return accounts[i].Return > accounts[j].Return
+		}
+		if accounts[i].Group != accounts[j].Group {
+			return accounts[i].Group < accounts[j].Group
+		}
+		return accounts[i].Mode < accounts[j].Mode
+	})
+	for i := range accounts {
+		accounts[i].Rank = i + 1
+	}
+}
+
+func buildTrialMode(prefix string, experimentID string) string {
+	return fmt.Sprintf("trial:%s:%s", sanitizeReportToken(prefix), sanitizeReportToken(experimentID))
+}
+
+func buildTrialShadowMode(version string, prefix string, experimentID string) string {
+	return fmt.Sprintf("shadow:%s:%s", strings.TrimSpace(version), buildTrialMode(prefix, experimentID))
+}
+
+func paperTrialGroup(mode string) string {
+	if strings.HasPrefix(mode, "shadow:") {
+		return "shadow"
+	}
+	return "live"
+}
+
+func countPaperTrialMatches(accounts []paperTrialAccountSummary, predicate func(paperTrialAccountSummary) bool) int {
+	count := 0
+	for _, account := range accounts {
+		if predicate(account) {
+			count++
+		}
+	}
+	return count
 }
 
 func runPortfolioGridSearch(strategy strategyConfig, risk riskConfig, portfolio portfolioConfig, regime regimeConfig, fromDate string, toDate string, initialCash float64, feeBps float64, slippageBps float64, topN int, shortMin int, shortMax int, longMin int, longMax int) ([]gridSearchResult, error) {
@@ -3711,6 +4153,464 @@ func writePaperTradingReports(result paperAccountResult) error {
 	return writeDashboardReports()
 }
 
+func writePaperTrialReports(result paperTrialBatchResult) error {
+	previous, err := loadPaperTrialResult(reportJSONPath("paper_trials_latest"))
+	if err != nil {
+		return err
+	}
+	attachPaperTrialComparison(&result, previous)
+	if err := writePaperTrialWinnerReports(result); err != nil {
+		return err
+	}
+
+	latestBase := "paper_trials_latest"
+	taggedBase := "paper_trials_" + sanitizeReportToken(result.ReportTag)
+
+	files := make([]string, 0, 8)
+	for _, baseName := range []string{latestBase, taggedBase} {
+		textPath := filepath.Join(reportsDir, baseName+".txt")
+		htmlPath := filepath.Join(reportsDir, baseName+".html")
+		csvPath := filepath.Join(reportsDir, baseName+".csv")
+		jsonPath := reportJSONPath(baseName)
+
+		textContent, htmlContent, csvContent := renderPaperTrialReport(result)
+		if err := os.WriteFile(textPath, []byte(textContent), 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(htmlPath, []byte(htmlContent), 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(csvPath, []byte(csvContent), 0o644); err != nil {
+			return err
+		}
+		if err := writeJSONFile(jsonPath, result); err != nil {
+			return err
+		}
+		files = append(files, textPath, htmlPath, csvPath, jsonPath)
+	}
+
+	if err := persistRunRecord("paper_trials", map[string]any{
+		"report_tag":            result.ReportTag,
+		"trial_prefix":          result.TrialPrefix,
+		"market":                result.Market,
+		"initial_cash":          result.InitialCash,
+		"trial_count":           result.TrialCount,
+		"include_shadow":        result.IncludeShadow,
+		"account_count":         len(result.Accounts),
+		"average_equity":        result.AverageEquity,
+		"average_return":        result.AverageReturn,
+		"best_mode":             result.BestMode,
+		"best_equity":           result.BestEquity,
+		"worst_mode":            result.WorstMode,
+		"worst_equity":          result.WorstEquity,
+		"active_version":        result.ActiveVersion,
+		"shadow_version":        result.ShadowVersion,
+		"previous_report_tag":   result.PreviousReportTag,
+		"previous_generated_at": result.PreviousGeneratedAt,
+		"improved_count":        result.ImprovedCount,
+		"regressed_count":       result.RegressedCount,
+		"new_count":             result.NewCount,
+		"unchanged_count":       result.UnchangedCount,
+		"comparison_summary":    result.ComparisonSummary,
+		"template_notes":        result.TemplateNotes,
+	}, files); err != nil {
+		return err
+	}
+	return writeDashboardReports()
+}
+
+func writePaperTrialWinnerReports(result paperTrialBatchResult) error {
+	winner, ok := buildPaperTrialWinnerArtifact(result)
+	if !ok {
+		return nil
+	}
+	if err := upsertStrategyVersion(result.Market, winner.CandidateVersion, "shadow", result.ActiveVersion, winner.Config, "paper-trial winner "+winner.ReportTag); err != nil {
+		return err
+	}
+	for _, baseName := range []string{"paper_trial_winner_latest", "paper_trial_winner_" + sanitizeReportToken(result.ReportTag)} {
+		textPath := filepath.Join(reportsDir, baseName+".txt")
+		jsonPath := reportJSONPath(baseName)
+		text := fmt.Sprintf(
+			"Paper Trial Winner\n\nReport tag: %s\nTrial prefix: %s\nGenerated at: %s\nCandidate version: %s\nSource mode: %s\nExperiment: %s\nStrategy version: %s\nRank: %d\nPrevious rank: %d\nRank delta: %+d\nEquity: %.2f\nEquity delta: %.2f\nReturn: %.2f%%\nReturn delta: %.2f%%\nParameters: %s\n",
+			winner.ReportTag,
+			winner.TrialPrefix,
+			winner.GeneratedAt,
+			winner.CandidateVersion,
+			winner.SourceMode,
+			winner.ExperimentID,
+			winner.StrategyVersion,
+			winner.Rank,
+			winner.PreviousRank,
+			winner.RankDelta,
+			winner.Equity,
+			winner.EquityDelta,
+			winner.Return*100,
+			winner.ReturnDelta*100,
+			winner.ParameterSummary,
+		)
+		if err := os.WriteFile(textPath, []byte(text), 0o644); err != nil {
+			return err
+		}
+		if err := writeJSONFile(jsonPath, winner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildPaperTrialWinnerArtifact(result paperTrialBatchResult) (paperTrialWinnerArtifact, bool) {
+	if len(result.Accounts) == 0 {
+		return paperTrialWinnerArtifact{}, false
+	}
+	winnerAccount := result.Accounts[0]
+	for _, account := range result.Accounts {
+		if account.Group == "live" {
+			winnerAccount = account
+			break
+		}
+	}
+	cfg, ok := result.variantConfigs[winnerAccount.Mode]
+	if !ok {
+		return paperTrialWinnerArtifact{}, false
+	}
+	candidateVersion := fmt.Sprintf("candidate_trial_%s_%s", sanitizeReportToken(result.ReportTag), sanitizeReportToken(winnerAccount.ExperimentID))
+	return paperTrialWinnerArtifact{
+		ReportTag:        result.ReportTag,
+		TrialPrefix:      result.TrialPrefix,
+		GeneratedAt:      result.GeneratedAt,
+		Market:           result.Market,
+		SourceMode:       winnerAccount.Mode,
+		SourceGroup:      winnerAccount.Group,
+		ExperimentID:     winnerAccount.ExperimentID,
+		StrategyVersion:  winnerAccount.Strategy,
+		CandidateVersion: candidateVersion,
+		ParameterSummary: winnerAccount.ParameterSummary,
+		Equity:           winnerAccount.Equity,
+		Return:           winnerAccount.Return,
+		Rank:             winnerAccount.Rank,
+		PreviousRank:     winnerAccount.PreviousRank,
+		RankDelta:        winnerAccount.RankDelta,
+		PreviousEquity:   winnerAccount.PreviousEquity,
+		EquityDelta:      winnerAccount.EquityDelta,
+		PreviousReturn:   winnerAccount.PreviousReturn,
+		ReturnDelta:      winnerAccount.ReturnDelta,
+		TopN:             winnerAccount.TopN,
+		ShortWindow:      winnerAccount.ShortWindow,
+		LongWindow:       winnerAccount.LongWindow,
+		FeeBps:           winnerAccount.FeeBps,
+		SlippageBps:      winnerAccount.SlippageBps,
+		Config:           cfg,
+	}, true
+}
+
+func loadPaperTrialWinnerArtifact(path string) (*paperTrialWinnerArtifact, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var winner paperTrialWinnerArtifact
+	if err := json.Unmarshal(content, &winner); err != nil {
+		return nil, err
+	}
+	return &winner, nil
+}
+
+func loadPaperTrialResult(path string) (*paperTrialBatchResult, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var result paperTrialBatchResult
+	if err := json.Unmarshal(content, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Accounts) > 0 && result.Accounts[0].Rank == 0 {
+		rankPaperTrialAccounts(result.Accounts)
+	}
+	return &result, nil
+}
+
+func attachPaperTrialComparison(current *paperTrialBatchResult, previous *paperTrialBatchResult) {
+	if previous == nil {
+		current.NewCount = len(current.Accounts)
+		current.UnchangedCount = 0
+		current.ImprovedCount = 0
+		current.RegressedCount = 0
+		current.ComparisonSummary = "No previous paper-trial batch found; this run becomes the baseline."
+		current.Groups, current.AverageEquity, current.AverageReturn, current.BestMode, current.BestEquity, current.WorstMode, current.WorstEquity = summarizePaperTrialGroups(current.Accounts)
+		return
+	}
+
+	if len(previous.Accounts) > 0 && previous.Accounts[0].Rank == 0 {
+		rankPaperTrialAccounts(previous.Accounts)
+	}
+
+	current.PreviousReportTag = previous.ReportTag
+	current.PreviousGeneratedAt = previous.GeneratedAt
+	previousByKey := make(map[string]paperTrialAccountSummary, len(previous.Accounts))
+	for _, account := range previous.Accounts {
+		previousByKey[paperTrialAccountKey(account.Group, account.ExperimentID)] = account
+	}
+
+	matched := 0
+	for i := range current.Accounts {
+		account := &current.Accounts[i]
+		prev, ok := previousByKey[paperTrialAccountKey(account.Group, account.ExperimentID)]
+		if !ok {
+			current.NewCount++
+			continue
+		}
+		matched++
+		account.PreviousRank = prev.Rank
+		account.RankDelta = prev.Rank - account.Rank
+		account.PreviousEquity = prev.Equity
+		account.EquityDelta = account.Equity - prev.Equity
+		account.PreviousReturn = prev.Return
+		account.ReturnDelta = account.Return - prev.Return
+		switch {
+		case account.EquityDelta > 1e-6:
+			current.ImprovedCount++
+		case account.EquityDelta < -1e-6:
+			current.RegressedCount++
+		default:
+			current.UnchangedCount++
+		}
+	}
+
+	current.ComparisonSummary = fmt.Sprintf(
+		"Compared with %s from %s: matched=%d improved=%d regressed=%d unchanged=%d new=%d",
+		firstNonEmpty(previous.ReportTag, "previous-batch"),
+		previous.GeneratedAt,
+		matched,
+		current.ImprovedCount,
+		current.RegressedCount,
+		current.UnchangedCount,
+		current.NewCount,
+	)
+	current.Groups, current.AverageEquity, current.AverageReturn, current.BestMode, current.BestEquity, current.WorstMode, current.WorstEquity = summarizePaperTrialGroups(current.Accounts)
+}
+
+func paperTrialAccountKey(group string, experimentID string) string {
+	return group + ":" + experimentID
+}
+
+func resolveShadowVersionName(explicit string, fallback string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit)
+	}
+	if envValue := strings.TrimSpace(os.Getenv("SHADOW_VERSION")); envValue != "" {
+		return envValue
+	}
+	winner, err := loadPaperTrialWinnerArtifact(reportJSONPath("paper_trial_winner_latest"))
+	if err == nil && winner != nil && strings.TrimSpace(winner.CandidateVersion) != "" {
+		return strings.TrimSpace(winner.CandidateVersion)
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func renderPaperTrialReport(result paperTrialBatchResult) (string, string, string) {
+	var textBuilder strings.Builder
+	fmt.Fprintf(&textBuilder, "Paper Trial Comparison\n\n")
+	fmt.Fprintf(&textBuilder, "Report tag: %s\n", result.ReportTag)
+	fmt.Fprintf(&textBuilder, "Trial prefix: %s\n", result.TrialPrefix)
+	fmt.Fprintf(&textBuilder, "Generated at: %s\n", result.GeneratedAt)
+	fmt.Fprintf(&textBuilder, "Market: %s\n", result.Market)
+	fmt.Fprintf(&textBuilder, "Initial cash: %.2f\n", result.InitialCash)
+	fmt.Fprintf(&textBuilder, "Virtual accounts per group: %d\n", result.TrialCount)
+	fmt.Fprintf(&textBuilder, "Include shadow: %t\n", result.IncludeShadow)
+	fmt.Fprintf(&textBuilder, "Active version: %s\n", result.ActiveVersion)
+	if result.IncludeShadow {
+		fmt.Fprintf(&textBuilder, "Shadow version: %s\n", result.ShadowVersion)
+	}
+	fmt.Fprintf(&textBuilder, "Average equity: %.2f\n", result.AverageEquity)
+	fmt.Fprintf(&textBuilder, "Average return: %.2f%%\n", result.AverageReturn*100)
+	fmt.Fprintf(&textBuilder, "Best mode: %s equity=%.2f\n", result.BestMode, result.BestEquity)
+	fmt.Fprintf(&textBuilder, "Worst mode: %s equity=%.2f\n", result.WorstMode, result.WorstEquity)
+	fmt.Fprintf(&textBuilder, "Comparison: %s\n", result.ComparisonSummary)
+	if len(result.TemplateNotes) > 0 {
+		textBuilder.WriteString("\nTemplate Notes\n")
+		for _, note := range result.TemplateNotes {
+			fmt.Fprintf(&textBuilder, "- %s\n", note)
+		}
+	}
+	textBuilder.WriteString("\nGroup Summary\n")
+	for _, group := range result.Groups {
+		fmt.Fprintf(&textBuilder, "- %s accounts=%d avg_equity=%.2f avg_return=%.2f%% best=%s(%.2f) worst=%s(%.2f)\n",
+			group.Group,
+			group.AccountCount,
+			group.AverageEquity,
+			group.AverageReturn*100,
+			group.BestMode,
+			group.BestEquity,
+			group.WorstMode,
+			group.WorstEquity,
+		)
+	}
+	textBuilder.WriteString("\nRanked Accounts\n")
+	for _, account := range result.Accounts {
+		fmt.Fprintf(&textBuilder, "- #%d [%s] %s strategy=%s exp=%s equity=%.2f cash=%.2f return=%.2f%% prev_rank=%d rank_delta=%+d eq_delta=%.2f ret_delta=%.2f%% top=%d fee=%.1f slip=%.1f params=%s note=%s\n",
+			account.Rank,
+			account.Group,
+			account.Mode,
+			account.Strategy,
+			account.ExperimentID,
+			account.Equity,
+			account.Cash,
+			account.Return*100,
+			account.PreviousRank,
+			account.RankDelta,
+			account.EquityDelta,
+			account.ReturnDelta*100,
+			account.TopN,
+			account.FeeBps,
+			account.SlippageBps,
+			account.ParameterSummary,
+			account.Note,
+		)
+	}
+
+	var groupRows strings.Builder
+	for _, group := range result.Groups {
+		fmt.Fprintf(&groupRows, `<tr><td>%s</td><td>%d</td><td>%.2f</td><td>%.2f%%</td><td>%s</td><td>%.2f</td><td>%s</td><td>%.2f</td><td>%d</td><td>%d</td><td>%d</td></tr>`,
+			html.EscapeString(group.Group),
+			group.AccountCount,
+			group.AverageEquity,
+			group.AverageReturn*100,
+			html.EscapeString(group.BestMode),
+			group.BestEquity,
+			html.EscapeString(group.WorstMode),
+			group.WorstEquity,
+			group.ImprovedCount,
+			group.RegressedCount,
+			group.NewCount,
+		)
+	}
+
+	var accountRows strings.Builder
+	for _, account := range result.Accounts {
+		fmt.Fprintf(&accountRows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.2f</td><td>%.2f%%</td><td>%d</td><td>%+d</td><td>%.2f</td><td>%.2f%%</td><td>%s</td><td>%s</td></tr>`,
+			account.Rank,
+			html.EscapeString(account.Group),
+			html.EscapeString(account.Mode),
+			html.EscapeString(account.Strategy),
+			html.EscapeString(account.ExperimentID),
+			account.Equity,
+			account.Return*100,
+			account.PreviousRank,
+			account.RankDelta,
+			account.EquityDelta,
+			account.ReturnDelta*100,
+			html.EscapeString(account.ParameterSummary),
+			html.EscapeString(account.MarketDate),
+		)
+	}
+
+	var notesHTML strings.Builder
+	if len(result.TemplateNotes) > 0 {
+		notesHTML.WriteString("<ul>")
+		for _, note := range result.TemplateNotes {
+			fmt.Fprintf(&notesHTML, "<li>%s</li>", html.EscapeString(note))
+		}
+		notesHTML.WriteString("</ul>")
+	}
+
+	htmlContent := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Trial Comparison</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f4efe6; color: #1f1b16; }
+    .wrap { max-width: 1280px; margin: 36px auto; padding: 0 20px; }
+    .card { background: #fffaf3; border: 1px solid #d9cfbf; border-radius: 18px; padding: 24px; box-shadow: 0 18px 40px rgba(70, 50, 20, 0.08); }
+    h1, h2 { margin-top: 0; }
+    .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .meta div { background: #f8f1e6; border: 1px solid #eadfcd; border-radius: 14px; padding: 12px 14px; }
+    table { width: 100%%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #e7dece; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; color: #6d6559; }
+    p, li { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Paper Trial Comparison</h1>
+      <div class="meta">
+        <div><strong>Report Tag</strong><br>%s</div>
+        <div><strong>Trial Prefix</strong><br>%s</div>
+        <div><strong>Market</strong><br>%s</div>
+        <div><strong>Initial Cash</strong><br>%.2f</div>
+        <div><strong>Virtuals / Group</strong><br>%d</div>
+        <div><strong>Include Shadow</strong><br>%t</div>
+        <div><strong>Average Equity</strong><br>%.2f</div>
+        <div><strong>Average Return</strong><br>%.2f%%</div>
+      </div>
+      <p><strong>Best:</strong> %s (%.2f) <br><strong>Worst:</strong> %s (%.2f)</p>
+      <p><strong>Comparison:</strong> %s</p>
+      %s
+      <h2>Group Summary</h2>
+      <table><thead><tr><th>Group</th><th>Accounts</th><th>Avg Equity</th><th>Avg Return</th><th>Best Mode</th><th>Best Equity</th><th>Worst Mode</th><th>Worst Equity</th><th>Improved</th><th>Regressed</th><th>New</th></tr></thead><tbody>%s</tbody></table>
+      <h2>Ranked Accounts</h2>
+      <table><thead><tr><th>Rank</th><th>Group</th><th>Mode</th><th>Strategy</th><th>Experiment</th><th>Equity</th><th>Return</th><th>Prev Rank</th><th>Rank Delta</th><th>Equity Delta</th><th>Return Delta</th><th>Parameters</th><th>Market Date</th></tr></thead><tbody>%s</tbody></table>
+    </div>
+  </div>
+</body>
+</html>`,
+		html.EscapeString(result.ReportTag),
+		html.EscapeString(result.TrialPrefix),
+		html.EscapeString(result.Market),
+		result.InitialCash,
+		result.TrialCount,
+		result.IncludeShadow,
+		result.AverageEquity,
+		result.AverageReturn*100,
+		html.EscapeString(result.BestMode),
+		result.BestEquity,
+		html.EscapeString(result.WorstMode),
+		result.WorstEquity,
+		html.EscapeString(result.ComparisonSummary),
+		notesHTML.String(),
+		groupRows.String(),
+		accountRows.String(),
+	)
+
+	var csvBuilder strings.Builder
+	csvBuilder.WriteString("rank,group,mode,strategy,experiment_id,market_date,equity,cash,return,previous_rank,rank_delta,equity_delta,return_delta,top_n,short_window,long_window,fee_bps,slippage_bps,parameters\n")
+	for _, account := range result.Accounts {
+		fmt.Fprintf(&csvBuilder, "%d,%s,%s,%s,%s,%s,%.2f,%.2f,%.6f,%d,%d,%.2f,%.6f,%d,%d,%d,%.2f,%.2f,%s\n",
+			account.Rank,
+			sanitizeCSV(account.Group),
+			sanitizeCSV(account.Mode),
+			sanitizeCSV(account.Strategy),
+			sanitizeCSV(account.ExperimentID),
+			sanitizeCSV(account.MarketDate),
+			account.Equity,
+			account.Cash,
+			account.Return,
+			account.PreviousRank,
+			account.RankDelta,
+			account.EquityDelta,
+			account.ReturnDelta,
+			account.TopN,
+			account.ShortWindow,
+			account.LongWindow,
+			account.FeeBps,
+			account.SlippageBps,
+			sanitizeCSV(account.ParameterSummary),
+		)
+	}
+
+	return textBuilder.String(), htmlContent, csvBuilder.String()
+}
+
 func paperReportBaseName(mode string) string {
 	if strings.HasPrefix(mode, "shadow:") {
 		return "paper_shadow"
@@ -3954,6 +4854,35 @@ func sanitizeCSV(value string) string {
 	value = strings.ReplaceAll(value, ",", " ")
 	value = strings.ReplaceAll(value, "\n", " ")
 	return value
+}
+
+func sanitizeReportToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "latest"
+	}
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			builder.WriteRune(r)
+			lastUnderscore = false
+		case r == '-' || r == '_':
+			builder.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore {
+				builder.WriteRune('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	sanitized := strings.Trim(builder.String(), "_")
+	if sanitized == "" {
+		return "latest"
+	}
+	return sanitized
 }
 
 func getLinearModel() *linearModel {
@@ -4237,6 +5166,9 @@ func writeDashboardReports() error {
 		{title: "A-Share Scan", path: filepath.Join(reportsDir, "a_share_scan.txt")},
 		{title: "Paper Trading", path: filepath.Join(reportsDir, "paper_account.txt")},
 		{title: "Shadow Trading", path: filepath.Join(reportsDir, "paper_shadow.txt")},
+		{title: "Strategy Compare", path: filepath.Join(reportsDir, "strategy_compare_latest.txt")},
+		{title: "Paper Trials", path: filepath.Join(reportsDir, "paper_trials_latest.txt")},
+		{title: "Trial Winner", path: filepath.Join(reportsDir, "paper_trial_winner_latest.txt")},
 		{title: "Evolution Report", path: filepath.Join(reportsDir, "evolution_report.txt")},
 		{title: "Overnight Evolution", path: filepath.Join(reportsDir, "evolution_report_overnight.txt")},
 		{title: "Runtime Report", path: filepath.Join(reportsDir, "runtime_report.txt")},
@@ -4552,6 +5484,56 @@ func ensureStrategyVersion(dbPath string, market string, versionName string, sta
 		quoteSQL("seeded from runtime configuration"),
 	)
 	return execSQLite(dbPath, insert)
+}
+
+func upsertStrategyVersion(market string, versionName string, status string, parentVersion string, cfg config, note string) error {
+	if strings.TrimSpace(runtimeConfig.DB.Path) == "" || strings.TrimSpace(versionName) == "" {
+		return nil
+	}
+	configJSON, err := json.Marshal(map[string]any{
+		"strategy":  cfg.Strategy,
+		"risk":      cfg.Risk,
+		"portfolio": cfg.Portfolio,
+		"regime":    cfg.Regime,
+		"market":    cfg.Market,
+	})
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	query := fmt.Sprintf("SELECT COUNT(*) FROM strategy_registry WHERE version_name = %s;", quoteSQL(versionName))
+	output, err := runSQLiteQuery(runtimeConfig.DB.Path, query)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(output) == "" || strings.TrimSpace(output) == "0" {
+		insert := fmt.Sprintf(
+			"INSERT INTO strategy_registry (market, version_name, status, parent_version, git_commit, config_json, model_path, created_at, activated_at, archived_at, notes) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+			quoteSQL(market),
+			quoteSQL(versionName),
+			quoteSQL(status),
+			quoteSQL(parentVersion),
+			quoteSQL(currentGitCommit()),
+			quoteSQL(string(configJSON)),
+			quoteSQL(cfg.Model.ModelPath),
+			quoteSQL(now),
+			quoteSQL(""),
+			quoteSQL(""),
+			quoteSQL(note),
+		)
+		return execSQLite(runtimeConfig.DB.Path, insert)
+	}
+	update := fmt.Sprintf(
+		"UPDATE strategy_registry SET status = %s, parent_version = %s, git_commit = %s, config_json = %s, model_path = %s, notes = %s WHERE version_name = %s;",
+		quoteSQL(status),
+		quoteSQL(parentVersion),
+		quoteSQL(currentGitCommit()),
+		quoteSQL(string(configJSON)),
+		quoteSQL(cfg.Model.ModelPath),
+		quoteSQL(note),
+		quoteSQL(versionName),
+	)
+	return execSQLite(runtimeConfig.DB.Path, update)
 }
 
 func loadStrategyVersionConfig(dbPath string, versionName string, fallback config) (config, error) {
@@ -7338,6 +8320,22 @@ func printPaperTradingSummary(result paperAccountResult) {
 	fmt.Printf("Holdings: %d\n", len(result.Holdings))
 	fmt.Printf("Orders this cycle: %d\n", len(result.Orders))
 	fmt.Printf("Note: %s\n\n", result.Note)
+}
+
+func printPaperTrialSummary(result paperTrialBatchResult) {
+	fmt.Printf("Paper Trial %s tag=%s prefix=%s\n", result.Market, result.ReportTag, result.TrialPrefix)
+	fmt.Printf("Accounts materialized: %d\n", len(result.Accounts))
+	fmt.Printf("Average equity: %.2f\n", result.AverageEquity)
+	fmt.Printf("Average return: %.2f%%\n", result.AverageReturn*100)
+	fmt.Printf("Best mode: %s equity=%.2f\n", result.BestMode, result.BestEquity)
+	fmt.Printf("Worst mode: %s equity=%.2f\n", result.WorstMode, result.WorstEquity)
+	if strings.TrimSpace(result.ComparisonSummary) != "" {
+		fmt.Printf("Comparison: %s\n", result.ComparisonSummary)
+	}
+	for _, group := range result.Groups {
+		fmt.Printf("Group %s: accounts=%d avg_equity=%.2f avg_return=%.2f%%\n", group.Group, group.AccountCount, group.AverageEquity, group.AverageReturn*100)
+	}
+	fmt.Println()
 }
 
 func execSQLite(path string, sql string) error {

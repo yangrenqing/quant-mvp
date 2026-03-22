@@ -23,6 +23,8 @@ def main():
     model_cmp = load_json("model_comparison.json")
     strategy = load_json("strategy_quality.json")
     overnight = load_json("evolution_report_overnight.json")
+    winner = load_json("paper_trial_winner_latest.json")
+    compare = load_json("strategy_compare_latest.json")
 
     strong = [item.get("feature", "") for item in (factor_diag.get("strong_factors") or [])[:3] if item.get("feature")]
     weak = [item.get("feature", "") for item in (factor_diag.get("weak_factors") or [])[:3] if item.get("feature")]
@@ -31,6 +33,14 @@ def main():
     portfolio = strategy.get("portfolio") or {}
     paper = strategy.get("paper_trading") or {}
     promotions = overnight.get("lifecycle_event_types") or {}
+    compare_promotion = compare.get("promotion_gate") or {}
+    compare_live = compare.get("latest_live") or {}
+    compare_shadow = compare.get("latest_shadow") or {}
+    compare_winner = compare.get("winner_metrics") or {}
+    winner_sync = compare.get("winner_sync") or "n/a"
+    winner_batch = compare.get("winner_batch") or {}
+    shadow_active_delta = ((compare.get("comparisons") or {}).get("shadow_vs_active") or {}).get("equity_delta")
+    winner_active_delta = ((compare.get("comparisons") or {}).get("winner_vs_active") or {}).get("equity_delta")
 
     summary_line = (
         f"当前平台以稳健为主：组合收益 {portfolio.get('total_return', 0.0) * 100:.2f}% ，"
@@ -46,8 +56,26 @@ def main():
         f"promotion {promotions.get('promotion', 0)} 次，rollback {promotions.get('rollback', 0)} 次。"
     )
     paper_line = (
-        f"当前 active={paper.get('active_version', 'n/a')}，"
-        f"active-shadow diff={paper.get('active_shadow_diff', 0.0):.2f}。"
+        f"当前 active={compare_live.get('strategy_version') or paper.get('active_version', 'n/a')}，"
+        f"shadow={compare_shadow.get('strategy_version', 'n/a')}，"
+        f"winner={winner.get('candidate_version', 'n/a')}，"
+        f"shadow-active diff={(shadow_active_delta if shadow_active_delta is not None else paper.get('active_shadow_diff', 0.0)):.2f}，"
+        f"winner-active diff={(winner_active_delta if winner_active_delta is not None else 0.0):.2f}。"
+    )
+    winner_line = (
+        f"当前实验 winner={winner.get('candidate_version', 'n/a')}，"
+        f"exp={winner.get('experiment_id', winner_batch.get('experiment_id', 'n/a'))}，"
+        f"sync={winner_sync}，"
+        f"rank_delta={winner.get('rank_delta', winner_batch.get('rank_delta', 0))}，"
+        f"equity_delta={winner.get('equity_delta', winner_batch.get('equity_delta', 0.0)):.2f}。"
+        if winner
+        else "当前实验 winner：n/a。"
+    )
+    promotion_line = (
+        f"当前 promotion gate={compare_promotion.get('status', 'n/a')}，"
+        f"reason={compare_promotion.get('reason', 'n/a')}。"
+        if compare_promotion
+        else "当前 promotion gate：n/a。"
     )
 
     payload = {
@@ -56,6 +84,8 @@ def main():
         "model_state": model_line,
         "evolution_state": evolution_line,
         "paper_state": paper_line,
+        "winner_state": winner_line,
+        "promotion_state": promotion_line,
         "verdict": strategy.get("verdict", ""),
     }
 
@@ -67,6 +97,8 @@ def main():
         model_line,
         evolution_line,
         paper_line,
+        winner_line,
+        promotion_line,
         "",
         f"Verdict: {strategy.get('verdict', 'n/a')}",
     ]

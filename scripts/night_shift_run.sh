@@ -69,10 +69,12 @@ run_py scripts/model_pipeline.py --from "$FROM_DATE" --to "$TO_DATE" --label "$M
 run_py scripts/factor_research.py --dataset reports/training_dataset.csv --label "$MODEL_LABEL"
 run_py scripts/factor_diagnostics.py --dataset reports/training_dataset.csv
 run_py scripts/model_comparison.py
-run_py scripts/strategy_quality.py
-run_py scripts/research_summary.py
+run_py scripts/health_monitor.py --source night-shift
 run_py scripts/evolution_report.py --preset overnight
 run_py scripts/runtime_report.py
+run_py scripts/strategy_compare.py
+run_py scripts/strategy_quality.py
+run_py scripts/research_summary.py
 run_go --dashboard-only
 
 echo "night shift finished at $(date --iso-8601=seconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)"

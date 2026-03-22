@@ -26,6 +26,7 @@ def main():
     portfolio = load_json("portfolio_backtest.json")
     paper = load_json("paper_account.json")
     shadow = load_json("paper_shadow.json")
+    compare = load_json("strategy_compare_latest.json")
     scan = load_json("a_share_scan.json")
     health = load_json("health_monitor.json")
     overnight = load_json("evolution_report_overnight.json")
@@ -37,8 +38,12 @@ def main():
     regime = portfolio.get("RegimeLabel") or portfolio.get("Regime") or "unknown"
     exposure = portfolio.get("ExposureLevel", 0)
 
-    live_equity = float((paper.get("Equity") or 0.0))
-    shadow_equity = float((shadow.get("Equity") or 0.0))
+    compare_live = compare.get("latest_live") or {}
+    compare_shadow = compare.get("latest_shadow") or {}
+    compare_promotion = compare.get("promotion_gate") or {}
+
+    live_equity = float(compare_live.get("equity") or paper.get("Equity") or 0.0)
+    shadow_equity = float(compare_shadow.get("equity") or shadow.get("Equity") or 0.0)
     equity_diff = shadow_equity - live_equity
     holdings = paper.get("Holdings") or []
     watch = scan.get("watch") or []
@@ -62,12 +67,14 @@ def main():
             "target_exposure": exposure,
         },
         "paper_trading": {
-            "active_version": paper.get("Version"),
+            "active_version": compare_live.get("strategy_version") or paper.get("Version"),
+            "shadow_version": compare_shadow.get("strategy_version") or shadow.get("Version"),
             "active_equity": live_equity,
             "shadow_equity": shadow_equity,
             "active_shadow_diff": equity_diff,
             "holdings_count": len(holdings),
-            "market_date": paper.get("MarketDate"),
+            "market_date": compare_live.get("market_date") or paper.get("MarketDate"),
+            "promotion_gate": compare_promotion.get("status", "n/a"),
         },
         "watch_top3": strongest,
         "health_status": health.get("status", "unknown"),
@@ -88,10 +95,12 @@ def main():
         f"- target exposure: {exposure}%",
         "",
         "Paper trading:",
-        f"- active version: {paper.get('Version', 'n/a')}",
+        f"- active version: {compare_live.get('strategy_version') or paper.get('Version', 'n/a')}",
         f"- active equity: {live_equity:.2f}",
+        f"- shadow version: {compare_shadow.get('strategy_version') or shadow.get('Version', 'n/a')}",
         f"- shadow equity: {shadow_equity:.2f}",
         f"- active vs shadow diff: {equity_diff:.2f}",
+        f"- promotion gate: {compare_promotion.get('status', 'n/a')}",
         f"- holdings count: {len(holdings)}",
         f"- health: {health.get('status', 'unknown')}",
         "",
