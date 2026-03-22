@@ -2,6 +2,32 @@
 
 ## 2026-03-23
 
+### feature/backtest-trust-execution-metadata · execution assumption metadata
+- 背景：next-bar 行为重构前，先把 backtest / portfolio backtest 的执行假设显式写进工件，避免 same-bar 假设继续隐身。
+- 已做：
+  - 给 `backtestResult` 增加：
+    - `signal_date_basis`
+    - `execution_date_basis`
+    - `same_bar_execution`
+    - `degraded_execution_assumption`
+  - 给 `portfolioBacktestResult` 增加同样字段
+  - 给 `backtestTrade` 预留：
+    - `signal_date`
+    - `execution_date`
+  - 更新 backtest / portfolio backtest 文本与 HTML 报告，把执行假设直接展示出来
+- 主要文件：
+  - `cmd/scheduler/main.go`
+- 验证：
+  - `/usr/local/go/bin/gofmt -w cmd/scheduler/main.go`
+  - `/usr/local/go/bin/go test ./...`
+- 当前状态：已验证，待提交
+- 合并状态：未合并进 `master`
+- 下一步：
+  - commit metadata slice
+  - 再进入 single-name next-bar slice
+
+## 2026-03-23
+
 ### docs/backtest-next-bar-handoff · next-bar execution handoff
 - 背景：compare / promotion gate 已收紧，当前最高杠杆风险转为 backtest 的 same-bar decision/execution coupling。
 - 已做：

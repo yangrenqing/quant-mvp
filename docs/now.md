@@ -1,47 +1,47 @@
 # Quant MVP NOW
 
-Updated: 2026-03-23 05:49 Asia/Shanghai
+Updated: 2026-03-23 06:58 Asia/Shanghai
 
 ## 当前状态
 - repo: `/Users/yangrenqing/Downloads/quant-mvp`
-- branch: `docs/backtest-next-bar-handoff`
+- branch: `feature/backtest-trust-execution-metadata`
 - baseline commit: `756661a`
 - mode: `autopilot active`
 - sprint: `quant-mvp-72h`
-- phase: `phase3-next-bar-handoff-ready`
+- phase: `phase3-execution-metadata-validated`
 
 ## 当前主线 feature
-### `docs/backtest-next-bar-handoff` · next-bar execution handoff
+### `feature/backtest-trust-execution-metadata` · execution assumption metadata
 目标：
 - backtest trustworthiness
-- strategy change handoff clarity
+- artifact truthfulness
 
 ## 最近已完成
-- 重新定位当前最高风险：same-bar decision/execution coupling
-- 梳理 `runPortfolioBacktest` 与 `simulateBacktest` 的关键代码段
-- 生成 `docs/backtest_next_bar_handoff.md`
-- 明确最安全的切片顺序：
-  1. execution metadata
-  2. single-name next-bar
-  3. portfolio next-bar
+- 给 backtest / portfolio backtest 结果结构增加 execution assumption metadata
+- 给 trade 结构预留 `signal_date` / `execution_date`
+- 更新 backtest 与 portfolio backtest 文本/HTML 报告，显式展示：
+  - signal basis
+  - execution basis
+  - same-bar execution
+  - degraded execution assumption
+- `go test ./...` 已通过
 
 ## 当前将收口进 git 的内容
-- `docs/backtest_next_bar_handoff.md`
+- `cmd/scheduler/main.go`
 - `docs/feature_log.md`
 - `docs/now.md`
 
 ## 下一步动作
-1. commit next-bar execution handoff doc
-2. 从 metadata slice 开新分支开始真正实现
-3. 每个 slice 独立验证并收口
+1. commit execution-metadata slice
+2. start single-name next-bar slice in a new branch
+3. after single-name slice validation, move to portfolio next-bar slice
 
 ## 关键入口
-- sprint 计划：`docs/sprint_72h_plan.md`
+- 当前交接：`docs/backtest_next_bar_handoff.md`
 - trust 报告：`reports/backtest_trust_report.md`
 - patch 计划：`reports/sprint72_patch_plan.md`
-- 当前交接：`docs/backtest_next_bar_handoff.md`
 - 当前驾驶舱：`docs/now.md`
 - feature 台账：`docs/feature_log.md`
 
 ## 一句话判断
-compare / promotion 口径已经收紧；现在最该做的是把 backtest 的时间真实性分三步落地，而不是一口气大改。
+在真正改 next-bar 行为之前，backtest 工件现在先学会把“自己还不够真实”这件事说清楚了。

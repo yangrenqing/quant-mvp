@@ -159,39 +159,45 @@ type scanCandidate struct {
 }
 
 type backtestTrade struct {
-	Date   string
-	Action string
-	Price  float64
-	Shares int
-	Fee    float64
-	Cash   float64
-	Equity float64
-	Reason string
+	Date          string
+	SignalDate    string
+	ExecutionDate string
+	Action        string
+	Price         float64
+	Shares        int
+	Fee           float64
+	Cash          float64
+	Equity        float64
+	Reason        string
 }
 
 type backtestResult struct {
-	Symbol            string
-	Name              string
-	FromDate          string
-	ToDate            string
-	InitialCash       float64
-	FinalEquity       float64
-	TotalReturn       float64
-	MaxDrawdown       float64
-	TradeCount        int
-	WinRate           float64
-	Mode              string
-	FeeBps            float64
-	SlippageBps       float64
-	TotalFees         float64
-	AnnualizedReturn  float64
-	BenchmarkReturn   float64
-	BenchmarkEquity   float64
-	BenchmarkDrawdown float64
-	ExcessReturn      float64
-	TradingDays       int
-	Trades            []backtestTrade
-	EquityCurve       []backtestTrade
+	Symbol                      string
+	Name                        string
+	FromDate                    string
+	ToDate                      string
+	InitialCash                 float64
+	FinalEquity                 float64
+	TotalReturn                 float64
+	MaxDrawdown                 float64
+	TradeCount                  int
+	WinRate                     float64
+	Mode                        string
+	FeeBps                      float64
+	SlippageBps                 float64
+	TotalFees                   float64
+	AnnualizedReturn            float64
+	BenchmarkReturn             float64
+	BenchmarkEquity             float64
+	BenchmarkDrawdown           float64
+	ExcessReturn                float64
+	TradingDays                 int
+	SignalDateBasis             string
+	ExecutionDateBasis          string
+	SameBarExecution            bool
+	DegradedExecutionAssumption bool
+	Trades                      []backtestTrade
+	EquityCurve                 []backtestTrade
 }
 
 type portfolioHolding struct {
@@ -367,27 +373,31 @@ type paperTrialWinnerArtifact struct {
 }
 
 type portfolioBacktestResult struct {
-	FromDate         string
-	ToDate           string
-	InitialCash      float64
-	FinalEquity      float64
-	TotalReturn      float64
-	AnnualizedReturn float64
-	BenchmarkReturn  float64
-	ExcessReturn     float64
-	MaxDrawdown      float64
-	Mode             string
-	FeeBps           float64
-	SlippageBps      float64
-	RebalanceCount   int
-	TradingDays      int
-	Positions        int
-	Snapshots        []portfolioSnapshot
-	BenchmarkCurve   []backtestTrade
-	LatestSelection  []scanCandidate
-	CurrentHoldings  []portfolioHolding
-	ExposureLevel    float64
-	RegimeLabel      string
+	FromDate                    string
+	ToDate                      string
+	InitialCash                 float64
+	FinalEquity                 float64
+	TotalReturn                 float64
+	AnnualizedReturn            float64
+	BenchmarkReturn             float64
+	ExcessReturn                float64
+	MaxDrawdown                 float64
+	Mode                        string
+	FeeBps                      float64
+	SlippageBps                 float64
+	RebalanceCount              int
+	TradingDays                 int
+	Positions                   int
+	SignalDateBasis             string
+	ExecutionDateBasis          string
+	SameBarExecution            bool
+	DegradedExecutionAssumption bool
+	Snapshots                   []portfolioSnapshot
+	BenchmarkCurve              []backtestTrade
+	LatestSelection             []scanCandidate
+	CurrentHoldings             []portfolioHolding
+	ExposureLevel               float64
+	RegimeLabel                 string
 }
 
 type gridSearchResult struct {
@@ -3499,12 +3509,20 @@ func writeBacktestReports(result backtestResult) error {
 
 	var tradeLines strings.Builder
 	for _, trade := range result.Trades {
-		fmt.Fprintf(&tradeLines, "%s %s price=%.2f shares=%d fee=%.2f cash=%.2f equity=%.2f reason=%s\n",
-			trade.Date, trade.Action, trade.Price, trade.Shares, trade.Fee, trade.Cash, trade.Equity, trade.Reason)
+		signalDate := trade.SignalDate
+		if signalDate == "" {
+			signalDate = trade.Date
+		}
+		executionDate := trade.ExecutionDate
+		if executionDate == "" {
+			executionDate = trade.Date
+		}
+		fmt.Fprintf(&tradeLines, "%s %s price=%.2f shares=%d fee=%.2f cash=%.2f equity=%.2f signal=%s exec=%s reason=%s\n",
+			trade.Date, trade.Action, trade.Price, trade.Shares, trade.Fee, trade.Cash, trade.Equity, signalDate, executionDate, trade.Reason)
 	}
 
 	textContent := fmt.Sprintf(
-		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark equity: %.2f\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nBenchmark drawdown: %.2f%%\nTrading days: %d\nTrades: %d\nWin rate: %.2f%%\nFee bps: %.2f\nSlippage bps: %.2f\nTotal fees: %.2f\n\nTrade Log\n%s",
+		"Backtest %s %s -> %s\nMode: %s\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark equity: %.2f\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nBenchmark drawdown: %.2f%%\nTrading days: %d\nTrades: %d\nWin rate: %.2f%%\nFee bps: %.2f\nSlippage bps: %.2f\nTotal fees: %.2f\nSignal basis: %s\nExecution basis: %s\nSame-bar execution: %t\nDegraded execution assumption: %t\n\nTrade Log\n%s",
 		result.Symbol,
 		result.FromDate,
 		result.ToDate,
@@ -3524,13 +3542,27 @@ func writeBacktestReports(result backtestResult) error {
 		result.FeeBps,
 		result.SlippageBps,
 		result.TotalFees,
+		result.SignalDateBasis,
+		result.ExecutionDateBasis,
+		result.SameBarExecution,
+		result.DegradedExecutionAssumption,
 		tradeLines.String(),
 	)
 
 	var rows strings.Builder
 	for _, trade := range result.Trades {
-		fmt.Fprintf(&rows, `<tr><td>%s</td><td>%s</td><td>%.2f</td><td>%d</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s</td></tr>`,
+		signalDate := trade.SignalDate
+		if signalDate == "" {
+			signalDate = trade.Date
+		}
+		executionDate := trade.ExecutionDate
+		if executionDate == "" {
+			executionDate = trade.Date
+		}
+		fmt.Fprintf(&rows, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.2f</td><td>%d</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s</td></tr>`,
 			html.EscapeString(trade.Date),
+			html.EscapeString(signalDate),
+			html.EscapeString(executionDate),
 			html.EscapeString(trade.Action),
 			trade.Price,
 			trade.Shares,
@@ -3541,7 +3573,7 @@ func writeBacktestReports(result backtestResult) error {
 		)
 	}
 	if len(result.Trades) == 0 {
-		rows.WriteString(`<tr><td colspan="8">No trades</td></tr>`)
+		rows.WriteString(`<tr><td colspan="10">No trades</td></tr>`)
 	}
 
 	htmlContent := fmt.Sprintf(`<!doctype html>
@@ -3583,11 +3615,15 @@ func writeBacktestReports(result backtestResult) error {
         <div>Fee bps: %.2f</div>
         <div>Slippage bps: %.2f</div>
         <div>Total fees: %.2f</div>
+        <div>Signal basis: %s</div>
+        <div>Execution basis: %s</div>
+        <div>Same-bar execution: %t</div>
+        <div>Degraded execution assumption: %t</div>
       </div>
       <div style="margin-top:18px">%s</div>
       <table>
         <thead>
-          <tr><th>Date</th><th>Action</th><th>Price</th><th>Shares</th><th>Fee</th><th>Cash</th><th>Equity</th><th>Reason</th></tr>
+          <tr><th>Date</th><th>Signal</th><th>Execution</th><th>Action</th><th>Price</th><th>Shares</th><th>Fee</th><th>Cash</th><th>Equity</th><th>Reason</th></tr>
         </thead>
         <tbody>%s</tbody>
       </table>
@@ -3614,6 +3650,10 @@ func writeBacktestReports(result backtestResult) error {
 		result.FeeBps,
 		result.SlippageBps,
 		result.TotalFees,
+		html.EscapeString(result.SignalDateBasis),
+		html.EscapeString(result.ExecutionDateBasis),
+		result.SameBarExecution,
+		result.DegradedExecutionAssumption,
 		svg,
 		rows.String(),
 	)
@@ -3867,7 +3907,7 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 	}
 
 	textContent := fmt.Sprintf(
-		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nRegime: %s\nTarget exposure: %.0f%%\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\n\nLatest selection\n%s",
+		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nRegime: %s\nTarget exposure: %.0f%%\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\nSignal basis: %s\nExecution basis: %s\nSame-bar execution: %t\nDegraded execution assumption: %t\n\nLatest selection\n%s",
 		result.FromDate,
 		result.ToDate,
 		result.Mode,
@@ -3884,6 +3924,10 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		result.RebalanceCount,
 		result.TradingDays,
 		lastHoldings,
+		result.SignalDateBasis,
+		result.ExecutionDateBasis,
+		result.SameBarExecution,
+		result.DegradedExecutionAssumption,
 		latest.String(),
 	)
 
@@ -3939,6 +3983,10 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
         <div>Rebalances: %d</div>
         <div>Trading days: %d</div>
         <div>Current holdings: %s</div>
+        <div>Signal basis: %s</div>
+        <div>Execution basis: %s</div>
+        <div>Same-bar execution: %t</div>
+        <div>Degraded execution assumption: %t</div>
       </div>
       <div style="margin-top:18px">%s</div>
       <div style="margin-top:18px">%s</div>
@@ -3968,6 +4016,10 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		result.RebalanceCount,
 		result.TradingDays,
 		html.EscapeString(lastHoldings),
+		html.EscapeString(result.SignalDateBasis),
+		html.EscapeString(result.ExecutionDateBasis),
+		result.SameBarExecution,
+		result.DegradedExecutionAssumption,
 		svg,
 		comparisonSVG,
 		selectionRows.String(),
