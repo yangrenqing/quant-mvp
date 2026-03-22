@@ -47,6 +47,7 @@ var diagnosticsState = runtimeDiagnostics{
 	ProviderFailures: map[string]int{},
 	FallbackReasons:  []string{},
 }
+var diagnosticsMu sync.Mutex
 
 type marketKind string
 
@@ -2261,13 +2262,13 @@ func passPortfolioCandidateFilters(history []marketBar, candidate scanCandidate,
 	if candidate.StructureScore > overheatThreshold {
 		return false
 	}
-	if candidate.CrowdingScore > 0.16 {
+	if candidate.CrowdingScore > 0.22 {
 		return false
 	}
 	if candidate.TrendScore < minTrendGap {
 		return false
 	}
-	if candidate.LowVolScore < -0.03 {
+	if candidate.LowVolScore < -0.08 {
 		return false
 	}
 	if candidate.HasBacktest {
@@ -2550,12 +2551,19 @@ func selectPortfolioCandidates(candidates []scanCandidate, topN int, minHoldings
 		industryLimit = 1
 	}
 	for _, candidate := range candidates {
-		// Prefer names with either strong standalone signal quality or
-		// acceptable historical validation.
-		if candidate.Score < 0.05 && candidate.BacktestExcess < 0 && candidate.BacktestReturn < 0 {
+		// Prefer candidates with a balanced multi-factor profile instead of
+		// only chasing raw momentum or short-term heat.
+		balancedProfile := candidate.ValueScore +
+			candidate.LowVolScore +
+			candidate.FundamentalScore +
+			candidate.ValuationScore +
+			candidate.LiquidityScore*2 -
+			candidate.CrowdingScore -
+			candidate.HeatPenalty
+		if candidate.Score < 0.02 && balancedProfile < 0.03 && candidate.BacktestExcess < 0 && candidate.BacktestReturn < 0 {
 			continue
 		}
-		if len(candidates) > minHoldings*2 && candidate.RotationScore < 0 {
+		if len(candidates) > minHoldings*2 && candidate.RotationScore < 0 && candidate.CrowdingScore > candidate.ValueScore+candidate.LowVolScore+candidate.FundamentalScore {
 			continue
 		}
 		industryKey := normalizedIndustry(candidate.Industry)
@@ -2614,48 +2622,54 @@ func reservePortfolioCandidates(candidates []scanCandidate, selected []scanCandi
 }
 
 func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig, regimeLabel string) float64 {
-	score := candidate.Score
-	score += candidate.QualityScore * portfolio.QualityWeight
-	score += candidate.RiskScore * portfolio.RiskWeight
-	score += candidate.ReversalScore * portfolio.ReversalWeight
-	score += candidate.ValueScore * 0.95
-	score += candidate.LowVolScore * 1.10
-	score -= candidate.CrowdingScore * 0.95
-	score += candidate.FundamentalScore * 1.05
-	score += candidate.ValuationScore * 0.90
-	score += candidate.EventScore * 0.80
-	score -= candidate.HeatPenalty * portfolio.HeatPenaltyWeight
+	score := candidate.Score * 0.55
+	score += candidate.QualityScore * portfolio.QualityWeight * 0.85
+	score += candidate.RiskScore * portfolio.RiskWeight * 0.90
+	score += candidate.ReversalScore * portfolio.ReversalWeight * 0.65
+	score += candidate.ValueScore * 1.30
+	score += candidate.LowVolScore * 1.25
+	score -= candidate.CrowdingScore * 1.15
+	score += candidate.FundamentalScore * 1.25
+	score += candidate.ValuationScore * 1.10
+	score += candidate.EventScore * 0.65
+	score += candidate.LiquidityScore * 2.40
+	score -= candidate.HeatPenalty * portfolio.HeatPenaltyWeight * 0.95
 	if candidate.HasBacktest {
 		score += candidate.BacktestExcess * portfolio.BacktestExcessWeight
 		score += candidate.BacktestReturn * portfolio.BacktestReturnWeight
 		score -= candidate.BacktestDrawdown * portfolio.BacktestDrawdownWeight
 	}
-	score += candidate.MomentumScore * portfolio.MomentumWeight
-	score += candidate.PersistenceScore * portfolio.PersistenceWeight
-	score += candidate.BreakoutScore * 0.80
-	score += candidate.VolumeTrendScore * 0.70
-	score += candidate.RotationScore * 1.20
-	score += candidate.StrategyAlignment * 1.50
-	score += candidate.ModelScore * 0.80
-	score += (candidate.BenchmarkModelScore - 0.50) * 0.60
+	score += candidate.MomentumScore * portfolio.MomentumWeight * 0.35
+	score += candidate.PersistenceScore * portfolio.PersistenceWeight * 0.30
+	score += candidate.BreakoutScore * 0.40
+	score += candidate.VolumeTrendScore * 0.20
+	score += candidate.RotationScore * 0.85
+	score += candidate.StrategyAlignment * 1.20
+	score += candidate.ModelScore * 0.45
+	score += (candidate.BenchmarkModelScore - 0.50) * 0.75
 	switch regimeLabel {
 	case "risk_on":
-		score += candidate.MomentumScore * 0.40
-		score += candidate.BreakoutScore * 0.35
+		score += candidate.MomentumScore * 0.30
+		score += candidate.BreakoutScore * 0.25
 		score += candidate.ModelScore * 0.25
-		score -= candidate.ValuationScore * 0.15
+		score += candidate.RotationScore * 0.15
+		score -= candidate.ValuationScore * 0.10
 	case "risk_off":
-		score += candidate.FundamentalScore * 0.35
-		score += candidate.ValuationScore * 0.30
-		score += candidate.LowVolScore * 0.30
+		score += candidate.FundamentalScore * 0.45
+		score += candidate.ValuationScore * 0.40
+		score += candidate.LowVolScore * 0.45
+		score += candidate.LiquidityScore * 1.20
+		score += candidate.ValueScore * 0.35
 		score += (candidate.BenchmarkModelScore - 0.50) * 0.40
-		score -= candidate.MomentumScore * 0.45
-		score -= candidate.BreakoutScore * 0.35
-		score -= candidate.HeatPenalty * 0.40
+		score -= candidate.MomentumScore * 0.30
+		score -= candidate.BreakoutScore * 0.20
+		score -= candidate.HeatPenalty * 0.45
+		score -= candidate.CrowdingScore * 0.25
 	default:
-		score += candidate.FundamentalScore * 0.15
-		score += candidate.ValuationScore * 0.10
-		score -= candidate.CrowdingScore * 0.10
+		score += candidate.FundamentalScore * 0.20
+		score += candidate.ValuationScore * 0.15
+		score += candidate.LowVolScore * 0.15
+		score -= candidate.CrowdingScore * 0.15
 	}
 	if candidate.RiskPenalty > 0 {
 		score -= candidate.RiskPenalty
@@ -2676,22 +2690,6 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 		closes = append(closes, bar.Close)
 	}
 
-	valueScore := 0.0
-	lookbackHigh := latest.Close
-	start := max(0, len(closes)-min(30, len(closes)))
-	for _, price := range closes[start:] {
-		if price > lookbackHigh {
-			lookbackHigh = price
-		}
-	}
-	if lookbackHigh > 0 && latest.Close >= longMA {
-		pullbackGap := 1 - latest.Close/lookbackHigh
-		valueScore = clampFloat(pullbackGap, 0, 0.18) * 0.70
-		if shortMA > 0 {
-			valueScore += clampFloat(shortMA/latest.Close-1, -0.03, 0.05) * 0.60
-		}
-	}
-
 	stabilityDrawdown := rollingMaxDrawdown(closes, min(20, len(closes)))
 	aboveLongRatio := 0.0
 	if len(bars) > 0 && longMA > 0 {
@@ -2707,60 +2705,62 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 		}
 	}
 
-	qualityScore := 0.0
-	qualityScore += trendScore * 1.15
-	qualityScore += persistenceScore * 1.35
-	qualityScore += liquidityScore * 5.50
-	qualityScore += valueScore * 0.85
-	qualityScore += clampFloat(aboveLongRatio-0.5, -0.2, 0.3) * 0.22
-	qualityScore += clampFloat(0.18-stabilityDrawdown, -0.10, 0.18) * 0.60
-	qualityScore += volumeTrendScore * 0.45
-	qualityScore = clampFloat(qualityScore, -0.20, 0.40)
+	pricePosition := rollingPricePosition(closes, min(60, len(closes)))
+	realizedVol := realizedVolatility(closes, min(20, len(closes)-1))
+	downsideVol := downsideVolatility(closes, min(20, len(closes)-1))
+	oneDayReturn := trailingReturn(closes, 1)
+
+	valueScore := 0.0
+	lookbackHigh := latest.Close
+	start := max(0, len(closes)-min(30, len(closes)))
+	for _, price := range closes[start:] {
+		if price > lookbackHigh {
+			lookbackHigh = price
+		}
+	}
+	pullbackGap := 0.0
+	if lookbackHigh > 0 {
+		pullbackGap = 1 - latest.Close/lookbackHigh
+	}
+	reversionGap := 0.0
+	if latest.Close > 0 && shortMA > 0 {
+		reversionGap = shortMA/latest.Close - 1
+	}
+	if longMA > 0 {
+		trendSupport := clampFloat(latest.Close/longMA-1, -0.06, 0.10)
+		valueScore += clampFloat(0.72-pricePosition, -0.18, 0.28) * 0.18
+		if pullbackGap > 0 && latest.Close >= longMA*0.98 {
+			valueScore += clampFloat(pullbackGap, 0, 0.20) * 0.55
+		}
+		valueScore += clampFloat(reversionGap, -0.04, 0.05) * 0.35
+		valueScore += clampFloat(0.12-mediumReturn, -0.18, 0.12) * 0.22
+		if trendSupport < -0.02 {
+			valueScore += trendSupport * 0.80
+		}
+	}
+	valueScore -= clampFloat(shortReturn-0.05, 0, 0.10) * 0.30
+	valueScore = clampFloat(valueScore, -0.18, 0.24)
 
 	volatilityPenalty := 0.0
-	lookback := min(10, len(closes)-1)
-	if lookback > 0 {
-		sumMoves := 0.0
-		count := 0.0
-		for i := len(closes) - lookback; i < len(closes); i++ {
-			if i == 0 || closes[i-1] <= 0 {
-				continue
-			}
-			sumMoves += math.Abs(closes[i]/closes[i-1] - 1)
-			count++
-		}
-		if count > 0 {
-			volatilityPenalty = clampFloat(sumMoves/count, 0, 0.08)
-		}
+	if realizedVol > 0 {
+		volatilityPenalty = clampFloat(realizedVol, 0, 0.08)
 	}
 
 	lowVolScore := 0.0
-	if volatilityPenalty > 0 {
-		lowVolScore = clampFloat(0.06-volatilityPenalty, -0.06, 0.06) * 1.10
-	}
-
-	riskScore := 0.0
-	if longMA > 0 {
-		distance := clampFloat(latest.Close/longMA-1, -0.08, 0.12)
-		if distance > 0 {
-			riskScore += distance * 0.60
-		}
-	}
-	if avgVolume > 0 {
-		riskScore += clampFloat(math.Log10(avgVolume+1)/10.0, 0, 0.08)
-	}
-	riskScore += lowVolScore
-	riskScore -= volatilityPenalty * 0.70
-	riskScore -= riskPenalty * 1.50
-	riskScore = clampFloat(riskScore, -0.15, 0.18)
+	lowVolScore += clampFloat(0.040-realizedVol, -0.03, 0.05) * 1.20
+	lowVolScore += clampFloat(0.022-downsideVol, -0.02, 0.04) * 1.40
+	lowVolScore += clampFloat(0.12-stabilityDrawdown, -0.10, 0.12) * 0.45
+	lowVolScore += clampFloat(aboveLongRatio-0.55, -0.20, 0.25) * 0.16
+	lowVolScore = clampFloat(lowVolScore, -0.08, 0.16)
 
 	crowdingScore := 0.0
-	if shortReturn > 0.04 {
-		crowdingScore += clampFloat(shortReturn-0.04, 0, 0.08) * 1.70
+	if shortReturn > 0.03 {
+		crowdingScore += clampFloat(shortReturn-0.03, 0, 0.10) * 1.25
 	}
-	if mediumReturn > 0.12 {
-		crowdingScore += clampFloat(mediumReturn-0.12, 0, 0.15) * 1.20
+	if mediumReturn > 0.08 {
+		crowdingScore += clampFloat(mediumReturn-0.08, 0, 0.18) * 0.95
 	}
+	crowdingScore += clampFloat(oneDayReturn-0.025, 0, 0.08) * 0.90
 	if avgVolume > 0 {
 		recentVolumeWindow := min(3, len(bars))
 		recentAvgVolume := 0.0
@@ -2768,31 +2768,65 @@ func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, a
 			recentAvgVolume += bar.Volume
 		}
 		recentAvgVolume /= float64(recentVolumeWindow)
-		crowdingScore += clampFloat(recentAvgVolume/avgVolume-1, 0, 0.80) * 0.10
+		crowdingScore += clampFloat(recentAvgVolume/avgVolume-1, 0, 1.00) * 0.08
 	}
-	crowdingScore += clampFloat(breakoutScore, 0, 0.03) * 1.40
-	crowdingScore = clampFloat(crowdingScore, 0, 0.24)
+	if shortMA > 0 {
+		crowdingScore += clampFloat(latest.Close/shortMA-1, 0, 0.05) * 0.95
+	}
+	crowdingScore += clampFloat(pricePosition-0.78, 0, 0.22) * 0.24
+	crowdingScore += clampFloat(breakoutScore, 0, 0.03) * 1.10
+	crowdingScore = clampFloat(crowdingScore, 0, 0.28)
 
 	heatPenalty := 0.0
-	if shortReturn > 0.05 {
-		heatPenalty += (shortReturn - 0.05) * 1.60
+	if shortReturn > 0.04 {
+		heatPenalty += (shortReturn - 0.04) * 1.30
 	}
-	if mediumReturn > 0.15 {
-		heatPenalty += (mediumReturn - 0.15) * 1.00
+	if mediumReturn > 0.12 {
+		heatPenalty += (mediumReturn - 0.12) * 0.80
 	}
-	heatPenalty += clampFloat(breakoutScore-0.01, 0, 0.05) * 3.0
-	heatPenalty += clampFloat(volumeTrendScore-0.02, 0, 0.06) * 2.0
-	heatPenalty += crowdingScore * 0.85
-	heatPenalty = clampFloat(heatPenalty, 0, 0.25)
+	heatPenalty += clampFloat(oneDayReturn-0.03, 0, 0.08) * 1.40
+	heatPenalty += clampFloat(volumeTrendScore-0.02, 0, 0.06) * 1.60
+	heatPenalty += crowdingScore * 0.95
+	heatPenalty = clampFloat(heatPenalty, 0, 0.28)
+
+	qualityScore := 0.0
+	qualityScore += trendScore * 0.95
+	qualityScore += persistenceScore * 0.85
+	qualityScore += liquidityScore * 6.80
+	qualityScore += lowVolScore * 0.75
+	qualityScore += valueScore * 0.35
+	qualityScore += clampFloat(aboveLongRatio-0.55, -0.20, 0.25) * 0.30
+	qualityScore += clampFloat(0.12-stabilityDrawdown, -0.10, 0.12) * 0.70
+	qualityScore += volumeTrendScore * 0.20
+	qualityScore -= crowdingScore * 0.20
+	qualityScore = clampFloat(qualityScore, -0.20, 0.45)
+
+	riskScore := 0.0
+	if longMA > 0 {
+		riskScore += clampFloat(latest.Close/longMA-1, -0.08, 0.12) * 0.40
+	}
+	if avgVolume > 0 {
+		riskScore += clampFloat(math.Log10(avgVolume+1)/10.0, 0, 0.09)
+	}
+	riskScore += liquidityScore * 2.80
+	riskScore += lowVolScore * 0.90
+	riskScore -= volatilityPenalty * 1.10
+	riskScore -= downsideVol * 1.35
+	riskScore -= stabilityDrawdown * 0.75
+	riskScore -= crowdingScore * 0.35
+	riskScore -= heatPenalty * 0.40
+	riskScore -= riskPenalty * 1.50
+	riskScore = clampFloat(riskScore, -0.18, 0.22)
 
 	reversalScore := 0.0
 	threeDayReturn := trailingReturn(closes, min(3, len(closes)-1))
-	if mediumReturn > 0 && latest.Close >= longMA && latest.Close <= shortMA*1.01 {
-		reversalScore += clampFloat(-threeDayReturn, 0, 0.06) * 1.50
-		reversalScore += clampFloat(shortMA/latest.Close-1, 0, 0.04) * 1.20
-		reversalScore += clampFloat(0.08-heatPenalty, 0, 0.08) * 0.60
+	if mediumReturn > 0 && latest.Close >= longMA*0.99 && latest.Close <= shortMA*1.01 {
+		reversalScore += clampFloat(-threeDayReturn, 0, 0.05) * 1.20
+		reversalScore += clampFloat(reversionGap, 0, 0.04) * 0.90
+		reversalScore += clampFloat(0.10-heatPenalty, 0, 0.10) * 0.50
+		reversalScore += clampFloat(0.02-downsideVol, -0.01, 0.02) * 0.60
 	}
-	reversalScore = clampFloat(reversalScore, 0, 0.18)
+	reversalScore = clampFloat(reversalScore, 0, 0.16)
 
 	return valueScore, lowVolScore, crowdingScore, qualityScore, riskScore, heatPenalty, reversalScore
 }
@@ -2852,6 +2886,73 @@ func trailingReturn(closes []float64, lookback int) float64 {
 		return 0
 	}
 	return latest/base - 1
+}
+
+func rollingPricePosition(closes []float64, lookback int) float64 {
+	if len(closes) == 0 {
+		return 0.5
+	}
+	if lookback <= 0 || lookback > len(closes) {
+		lookback = len(closes)
+	}
+	window := closes[len(closes)-lookback:]
+	low := window[0]
+	high := window[0]
+	for _, close := range window[1:] {
+		if close < low {
+			low = close
+		}
+		if close > high {
+			high = close
+		}
+	}
+	if high <= low {
+		return 0.5
+	}
+	return clampFloat((closes[len(closes)-1]-low)/(high-low), 0, 1)
+}
+
+func realizedVolatility(closes []float64, lookback int) float64 {
+	if len(closes) < 2 {
+		return 0
+	}
+	if lookback <= 0 || lookback >= len(closes) {
+		lookback = len(closes) - 1
+	}
+	returns := make([]float64, 0, lookback)
+	for i := len(closes) - lookback; i < len(closes); i++ {
+		if i == 0 || closes[i-1] <= 0 {
+			continue
+		}
+		returns = append(returns, closes[i]/closes[i-1]-1)
+	}
+	if len(returns) == 0 {
+		return 0
+	}
+	return standardDeviation(returns)
+}
+
+func downsideVolatility(closes []float64, lookback int) float64 {
+	if len(closes) < 2 {
+		return 0
+	}
+	if lookback <= 0 || lookback >= len(closes) {
+		lookback = len(closes) - 1
+	}
+	downside := make([]float64, 0, lookback)
+	for i := len(closes) - lookback; i < len(closes); i++ {
+		if i == 0 || closes[i-1] <= 0 {
+			continue
+		}
+		change := closes[i]/closes[i-1] - 1
+		if change < 0 {
+			downside = append(downside, math.Abs(change))
+		}
+	}
+	if len(downside) == 0 {
+		return 0
+	}
+	return average(downside)
 }
 
 func medianFloat(values []float64) float64 {
@@ -3791,7 +3892,7 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	}
 
 	var textBuilder strings.Builder
-	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nFeatures: 24\nLabels: label_5d, label_10d, label_20d, excess_5d, excess_10d, excess_20d, beat_benchmark_5d, beat_benchmark_10d, beat_benchmark_20d\nCSV: %s\n\nSample Rows\n",
+	fmt.Fprintf(&textBuilder, "Training Dataset %s -> %s\n\nRows: %d\nModel-ready columns: score plus multi-factor/regime features\nLabels: label_5d, label_10d, label_20d, excess_5d, excess_10d, excess_20d, beat_benchmark_5d, beat_benchmark_10d, beat_benchmark_20d\nCSV: %s\n\nSample Rows\n",
 		fromDate,
 		toDate,
 		len(rows),
@@ -3800,12 +3901,17 @@ func writeDatasetReports(rows []datasetRow, fromDate string, toDate string) erro
 	sampleCount := min(5, len(rows))
 	for i := 0; i < sampleCount; i++ {
 		row := rows[i]
-		fmt.Fprintf(&textBuilder, "%d. %s %s %s score=%.4f label5=%.2f%% label10=%.2f%% label20=%.2f%% excess10=%.2f%% beat10=%.0f\n",
+		fmt.Fprintf(&textBuilder, "%d. %s %s %s score=%.4f value=%.4f low_vol=%.4f crowding=%.4f fundamental=%.4f valuation=%.4f label5=%.2f%% label10=%.2f%% label20=%.2f%% excess10=%.2f%% beat10=%.0f\n",
 			i+1,
 			row.Date,
 			row.Symbol,
 			row.Name,
 			row.Score,
+			row.ValueScore,
+			row.LowVolScore,
+			row.CrowdingScore,
+			row.FundamentalScore,
+			row.ValuationScore,
 			row.Label5D*100,
 			row.Label10D*100,
 			row.Label20D*100,
@@ -4576,6 +4682,8 @@ func appendExperimentRecord(experimentType string, configValues map[string]any, 
 }
 
 func noteProviderFailure(provider string, reason string) {
+	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
 	if diagnosticsState.ProviderFailures == nil {
 		diagnosticsState.ProviderFailures = map[string]int{}
 	}
@@ -4587,52 +4695,72 @@ func noteProviderFailure(provider string, reason string) {
 }
 
 func noteCacheHit() {
+	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
 	diagnosticsState.CacheHits++
 	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
 }
 
 func noteCacheMiss() {
+	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
 	diagnosticsState.CacheMisses++
 	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
 }
 
 func noteCacheStaleLoad() {
+	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
 	diagnosticsState.CacheStaleLoads++
 	diagnosticsState.LastUpdated = time.Now().Format(time.RFC3339)
 }
 
 func writeDiagnosticsReports() error {
+	diagnosticsMu.Lock()
+	snapshot := runtimeDiagnostics{
+		CacheHits:        diagnosticsState.CacheHits,
+		CacheMisses:      diagnosticsState.CacheMisses,
+		CacheStaleLoads:  diagnosticsState.CacheStaleLoads,
+		ProviderFailures: map[string]int{},
+		FallbackReasons:  append([]string(nil), diagnosticsState.FallbackReasons...),
+		LastUpdated:      diagnosticsState.LastUpdated,
+	}
+	for key, value := range diagnosticsState.ProviderFailures {
+		snapshot.ProviderFailures[key] = value
+	}
+	diagnosticsMu.Unlock()
+
 	textPath := filepath.Join(reportsDir, "diagnostics.txt")
 	jsonPath := filepath.Join(reportsDir, "diagnostics.json")
 	var builder strings.Builder
 	builder.WriteString("Diagnostics\n\n")
-	fmt.Fprintf(&builder, "Cache hits: %d\n", diagnosticsState.CacheHits)
-	fmt.Fprintf(&builder, "Cache misses: %d\n", diagnosticsState.CacheMisses)
-	fmt.Fprintf(&builder, "Stale cache loads: %d\n", diagnosticsState.CacheStaleLoads)
-	if len(diagnosticsState.ProviderFailures) == 0 {
+	fmt.Fprintf(&builder, "Cache hits: %d\n", snapshot.CacheHits)
+	fmt.Fprintf(&builder, "Cache misses: %d\n", snapshot.CacheMisses)
+	fmt.Fprintf(&builder, "Stale cache loads: %d\n", snapshot.CacheStaleLoads)
+	if len(snapshot.ProviderFailures) == 0 {
 		builder.WriteString("Provider failures: none\n")
 	} else {
 		builder.WriteString("Provider failures:\n")
-		keys := make([]string, 0, len(diagnosticsState.ProviderFailures))
-		for key := range diagnosticsState.ProviderFailures {
+		keys := make([]string, 0, len(snapshot.ProviderFailures))
+		for key := range snapshot.ProviderFailures {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			fmt.Fprintf(&builder, "- %s: %d\n", key, diagnosticsState.ProviderFailures[key])
+			fmt.Fprintf(&builder, "- %s: %d\n", key, snapshot.ProviderFailures[key])
 		}
 	}
-	if len(diagnosticsState.FallbackReasons) > 0 {
+	if len(snapshot.FallbackReasons) > 0 {
 		builder.WriteString("Fallback reasons:\n")
-		limit := min(10, len(diagnosticsState.FallbackReasons))
-		for _, item := range diagnosticsState.FallbackReasons[len(diagnosticsState.FallbackReasons)-limit:] {
+		limit := min(10, len(snapshot.FallbackReasons))
+		for _, item := range snapshot.FallbackReasons[len(snapshot.FallbackReasons)-limit:] {
 			fmt.Fprintf(&builder, "- %s\n", item)
 		}
 	}
 	if err := os.WriteFile(textPath, []byte(builder.String()), 0o644); err != nil {
 		return err
 	}
-	return writeJSONFile(jsonPath, diagnosticsState)
+	return writeJSONFile(jsonPath, snapshot)
 }
 
 func cleanupOldArtifacts() error {
@@ -6118,14 +6246,23 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	fundamentalScore, valuationScore, eventScore := fundamentalOverlayScores(symbol)
 	action, strategyAlignment, strategyVotes, reason, trigger := evaluateStrategyEnsemble(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, dataSource, sourceErr, portfolio)
 	score = score*0.35 +
-		qualityScore*portfolio.QualityWeight +
-		riskScore*portfolio.RiskWeight +
-		fundamentalScore*1.05 +
-		valuationScore*0.90 +
-		eventScore*0.80 +
-		reversalScore*portfolio.ReversalWeight -
-		heatPenalty*portfolio.HeatPenaltyWeight +
-		strategyAlignment*0.50
+		qualityScore*portfolio.QualityWeight*0.95 +
+		riskScore*portfolio.RiskWeight*0.90 +
+		valueScore*1.20 +
+		lowVolScore*1.05 -
+		crowdingScore*0.90 +
+		fundamentalScore*1.25 +
+		valuationScore*1.05 +
+		eventScore*0.70 +
+		reversalScore*portfolio.ReversalWeight*0.75 -
+		heatPenalty*portfolio.HeatPenaltyWeight*0.95 +
+		liquidityScore*2.20 +
+		trendScore*0.40 +
+		structureScore*0.30 +
+		momentumScore*portfolio.MomentumWeight*0.20 +
+		persistenceScore*portfolio.PersistenceWeight*0.20 +
+		volumeTrendScore*0.15 +
+		strategyAlignment*0.45
 
 	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
 	candidate := scanCandidate{
@@ -6171,10 +6308,10 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	candidate.ModelScore = predictLinearModel(candidate)
 	candidate.BenchmarkModelScore = predictBenchmarkModel(candidate)
 	if candidate.ModelScore != 0 {
-		candidate.Score = candidate.Score*0.70 + candidate.ModelScore*0.30
+		candidate.Score = candidate.Score*0.80 + candidate.ModelScore*0.20
 	}
 	if candidate.BenchmarkModelScore != 0 {
-		candidate.Score += (candidate.BenchmarkModelScore - 0.50) * 0.20
+		candidate.Score += (candidate.BenchmarkModelScore - 0.50) * 0.15
 	}
 	return candidate, nil
 }
@@ -6203,17 +6340,20 @@ func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64,
 
 	liquidityScore := 0.0
 	if avgTurnover > 0 {
-		liquidityScore += math.Min(math.Log10(avgTurnover+1)/10.0, 0.04)
+		liquidityScore += math.Min(math.Log10(avgTurnover+1)/10.0, 0.05)
+	}
+	if avgVolume > 0 {
+		liquidityScore += clampFloat(math.Log10(avgVolume+1)/10.0-0.50, -0.02, 0.03)
 	}
 	if illiquidity > 0 {
-		liquidityScore -= clampFloat(illiquidity*1e8, 0, 0.03)
+		liquidityScore -= clampFloat(illiquidity*1e8, 0, 0.04)
 	}
 	recentVolumeWindow := min(5, len(volumes))
 	if recentVolumeWindow > 1 {
 		recentVolatility := standardDeviation(volumes[len(volumes)-recentVolumeWindow:])
 		recentAverage := average(volumes[len(volumes)-recentVolumeWindow:])
 		if recentAverage > 0 {
-			liquidityScore += clampFloat(0.8-recentVolatility/recentAverage, -0.3, 0.3) * 0.03
+			liquidityScore += clampFloat(0.9-recentVolatility/recentAverage, -0.25, 0.25) * 0.04
 		}
 	}
 
@@ -6274,7 +6414,14 @@ func scoreCandidate(bars []marketBar, shortWindow int, longWindow int) (float64,
 		riskPenalty = (stopLine - latest.Close) / stopLine
 	}
 
-	total := trendScore + liquidityScore + structureScore + momentumScore + persistenceScore + breakoutScore + volumeTrendScore - riskPenalty
+	total := trendScore*0.90 +
+		liquidityScore*1.20 +
+		structureScore*0.80 +
+		momentumScore*0.55 +
+		persistenceScore*0.55 +
+		breakoutScore*0.45 +
+		volumeTrendScore*0.25 -
+		riskPenalty*1.20
 	return trendScore, liquidityScore, structureScore, momentumScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty, total
 }
 
@@ -6606,7 +6753,7 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
-		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | value %.4f | low_vol %.4f | crowding %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | risk_penalty %.4f\n",
+		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | value %.4f | low_vol %.4f | crowding %.4f | fundamental %.4f | valuation %.4f | event %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | benchmark_model %.4f | risk_penalty %.4f\n",
 			candidate.QualityScore,
 			candidate.RiskScore,
 			candidate.HeatPenalty,
@@ -6614,6 +6761,9 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 			candidate.ValueScore,
 			candidate.LowVolScore,
 			candidate.CrowdingScore,
+			candidate.FundamentalScore,
+			candidate.ValuationScore,
+			candidate.EventScore,
 			candidate.TrendScore,
 			candidate.LiquidityScore,
 			candidate.StructureScore,
@@ -6624,6 +6774,7 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 			candidate.RotationScore,
 			candidate.StrategyAlignment,
 			candidate.ModelScore,
+			candidate.BenchmarkModelScore,
 			candidate.RiskPenalty,
 		)
 		if candidate.StrategyVotes != "" {
@@ -6690,7 +6841,7 @@ func buildBucketRows(candidates []scanCandidate) string {
 				candidate.BacktestTrades,
 			)
 		}
-		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>T %.4f | L %.4f | S %.4f | M %.4f | P %.4f | B %.4f | V %.4f | Rot %.4f | Strat %.4f | Model %.4f | R %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small><br><small>%s</small>%s</td><td>%s</td><td>%s</td></tr>`,
+		fmt.Fprintf(&rows, `<tr><td>%d</td><td>%s</td><td>%s<br><small>%s</small>%s</td><td>%s</td><td>%.4f<br><small>Value %.4f | LowVol %.4f | Crowd %.4f | Fund %.4f | Val %.4f | Event %.4f | Liq %.4f | Mom %.4f | Rot %.4f | Model %.4f/%.4f | Heat %.4f</small></td><td>%.0f</td><td>%.2f</td><td>%.2f</td><td>%.2f</td><td>%s<br><small>%s @ %.2f</small><br><small>%s</small>%s</td><td>%s</td><td>%s</td></tr>`,
 			i+1,
 			html.EscapeString(candidate.Symbol),
 			html.EscapeString(candidate.Name),
@@ -6698,17 +6849,18 @@ func buildBucketRows(candidates []scanCandidate) string {
 			portfolioTag,
 			html.EscapeString(candidate.Action),
 			candidate.Score,
-			candidate.TrendScore,
+			candidate.ValueScore,
+			candidate.LowVolScore,
+			candidate.CrowdingScore,
+			candidate.FundamentalScore,
+			candidate.ValuationScore,
+			candidate.EventScore,
 			candidate.LiquidityScore,
-			candidate.StructureScore,
 			candidate.MomentumScore,
-			candidate.PersistenceScore,
-			candidate.BreakoutScore,
-			candidate.VolumeTrendScore,
 			candidate.RotationScore,
-			candidate.StrategyAlignment,
 			candidate.ModelScore,
-			candidate.RiskPenalty,
+			candidate.BenchmarkModelScore,
+			candidate.HeatPenalty,
 			candidate.AvgVolume,
 			candidate.ShortMA,
 			candidate.LongMA,

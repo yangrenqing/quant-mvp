@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 DEFAULT_FEATURES = [
-    "score",
     "quality_score",
     "risk_score",
     "heat_penalty",

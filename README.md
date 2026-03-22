@@ -195,3 +195,9 @@ cd /Users/yangrenqing/Downloads/quant-mvp
 bash scripts/install_launchd.sh
 launchctl list | rg quant-mvp
 ```
+
+Night shift automation:
+- `com.yangrenqing.quant-mvp.night-shift` wakes every 10 minutes
+- it only runs inside the night window controlled by `NIGHT_START_HOUR` / `NIGHT_END_HOUR`
+- default window is `22:00 -> 08:00`
+- it refreshes dataset, model pipeline, factor research, diagnostics, summaries, runtime/evolution reports, and dashboard
