@@ -2,6 +2,21 @@
 
 ## 2026-03-23
 
+### docs/backtest-next-bar-handoff · next-bar execution handoff
+- 背景：compare / promotion gate 已收紧，当前最高杠杆风险转为 backtest 的 same-bar decision/execution coupling。
+- 已做：
+  - 梳理 `runPortfolioBacktest` 与 `simulateBacktest` 的 same-bar 触发点
+  - 形成 `docs/backtest_next_bar_handoff.md`
+  - 明确最安全的实施顺序：先执行假设元数据，再单标的 next-bar，再组合 next-bar
+- 主要文件：
+  - `docs/backtest_next_bar_handoff.md`
+- 当前状态：handoff ready
+- 合并状态：未合并进 `master`
+- 下一步：
+  - 按 handoff 从 metadata slice 开新分支实施
+
+## 2026-03-23
+
 ### feature/evolution-gates-compare-artifact-sync · compare artifact sync gate
 - 背景：promotion gate 之前只看 candidate shadow 指标与 winner 工件，未强制 compare 工件已经对齐候选视图，存在 compare/promotion 口径短暂失步的风险。
 - 已做：
