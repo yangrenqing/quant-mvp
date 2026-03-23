@@ -208,10 +208,12 @@ type portfolioHolding struct {
 }
 
 type portfolioSnapshot struct {
-	Date     string
-	Equity   float64
-	Cash     float64
-	Holdings []portfolioHolding
+	Date          string
+	SignalDate    string
+	ExecutionDate string
+	Equity        float64
+	Cash          float64
+	Holdings      []portfolioHolding
 }
 
 type paperPosition struct {
@@ -1291,6 +1293,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 	lastExposureLevel := 1.0
 	pendingTargetSet := map[string]scanCandidate{}
 	pendingReserveCandidates := make([]scanCandidate, 0)
+	pendingSignalDate := ""
 
 	for dayIdx, date := range dates {
 		candidates := make([]scanCandidate, 0, len(series))
@@ -1586,15 +1589,23 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			})
 		}
 		sort.Slice(holdingsList, func(i, j int) bool { return holdingsList[i].Symbol < holdingsList[j].Symbol })
+		executionDate := date
+		signalDate := pendingSignalDate
+		if signalDate == "" {
+			signalDate = date
+		}
 		snapshots = append(snapshots, portfolioSnapshot{
-			Date:     date,
-			Equity:   equity,
-			Cash:     cash,
-			Holdings: holdingsList,
+			Date:          date,
+			SignalDate:    signalDate,
+			ExecutionDate: executionDate,
+			Equity:        equity,
+			Cash:          cash,
+			Holdings:      holdingsList,
 		})
 
 		pendingTargetSet = nextTargetSet
 		pendingReserveCandidates = append([]scanCandidate(nil), reserveCandidates...)
+		pendingSignalDate = date
 
 		if equity > peakEquity {
 			peakEquity = equity
@@ -3936,8 +3947,15 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		lastHoldings = strings.Join(names, "; ")
 	}
 
+	latestSignalDate := "n/a"
+	latestExecutionDate := "n/a"
+	if len(result.Snapshots) > 0 {
+		latestSignalDate = result.Snapshots[len(result.Snapshots)-1].SignalDate
+		latestExecutionDate = result.Snapshots[len(result.Snapshots)-1].ExecutionDate
+	}
+
 	textContent := fmt.Sprintf(
-		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nRegime: %s\nTarget exposure: %.0f%%\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\nSignal basis: %s\nExecution basis: %s\nSame-bar execution: %t\nDegraded execution assumption: %t\n\nLatest selection\n%s",
+		"Portfolio Backtest %s -> %s\nMode: %s\nPositions: %d\nRegime: %s\nTarget exposure: %.0f%%\nInitial cash: %.2f\nFinal equity: %.2f\nTotal return: %.2f%%\nAnnualized return: %.2f%%\nBenchmark return: %.2f%%\nExcess return: %.2f%%\nMax drawdown: %.2f%%\nRebalances: %d\nTrading days: %d\nCurrent holdings: %s\nSignal basis: %s\nExecution basis: %s\nLatest signal date: %s\nLatest execution date: %s\nSame-bar execution: %t\nDegraded execution assumption: %t\n\nLatest selection\n%s",
 		result.FromDate,
 		result.ToDate,
 		result.Mode,
@@ -3956,6 +3974,8 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		lastHoldings,
 		result.SignalDateBasis,
 		result.ExecutionDateBasis,
+		latestSignalDate,
+		latestExecutionDate,
 		result.SameBarExecution,
 		result.DegradedExecutionAssumption,
 		latest.String(),
@@ -4015,6 +4035,8 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
         <div>Current holdings: %s</div>
         <div>Signal basis: %s</div>
         <div>Execution basis: %s</div>
+        <div>Latest signal date: %s</div>
+        <div>Latest execution date: %s</div>
         <div>Same-bar execution: %t</div>
         <div>Degraded execution assumption: %t</div>
       </div>
@@ -4048,6 +4070,8 @@ func writePortfolioBacktestReports(result portfolioBacktestResult) error {
 		html.EscapeString(lastHoldings),
 		html.EscapeString(result.SignalDateBasis),
 		html.EscapeString(result.ExecutionDateBasis),
+		html.EscapeString(latestSignalDate),
+		html.EscapeString(latestExecutionDate),
 		result.SameBarExecution,
 		result.DegradedExecutionAssumption,
 		svg,
