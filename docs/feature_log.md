@@ -2,6 +2,26 @@
 
 ## 2026-03-23
 
+### feature/backtest-trust-next-bar-single · single-name next-bar execution
+- 背景：在 execution metadata slice 说清当前假设后，下一步先把单标的 backtest 从 same-bar decision/execution 改成 next-bar execution，降低最直接的时序泄漏。
+- 已做：
+  - `simulateBacktest` 至少要求 `longWindow + 1` 根 bar，确保信号日之后还有可执行日
+  - 将信号 bar 与执行 bar 分离：`signalBar := filtered[i]`，`execBar := filtered[i+1]`
+  - 买卖单统一改为在 `open_t_plus_1` 执行，并把 T+1 / gap / capacity 检查对齐到执行日
+  - trade / equity 记录写入 `signal_date` 与 `execution_date`，并把 backtest result 的 execution metadata 切到 `open_t_plus_1` + `same_bar_execution=false`
+- 主要文件：
+  - `cmd/scheduler/main.go`
+- 验证：
+  - `/usr/local/go/bin/gofmt -w cmd/scheduler/main.go`
+  - `/usr/local/go/bin/go test ./...`
+- 当前状态：已提交
+- 合并状态：未合并进 `master`
+- 下一步：
+  - 进入 portfolio next-bar slice
+  - 完成后再对齐 reports/docs 恢复点
+
+## 2026-03-23
+
 ### feature/backtest-trust-execution-metadata · execution assumption metadata
 - 背景：next-bar 行为重构前，先把 backtest / portfolio backtest 的执行假设显式写进工件，避免 same-bar 假设继续隐身。
 - 已做：

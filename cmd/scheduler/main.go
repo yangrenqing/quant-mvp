@@ -2360,8 +2360,8 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			filtered = append(filtered, bar)
 		}
 	}
-	if len(filtered) < longWindow {
-		return backtestResult{}, fmt.Errorf("not enough bars in backtest window: need %d, got %d", longWindow, len(filtered))
+	if len(filtered) < longWindow+1 {
+		return backtestResult{}, fmt.Errorf("not enough bars in backtest window for next-bar execution: need %d, got %d", longWindow+1, len(filtered))
 	}
 
 	cash := initialCash
@@ -2380,9 +2380,9 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 	entryDate := ""
 
 	closes := make([]float64, 0, len(filtered))
-	for i, bar := range filtered {
-		closes = append(closes, bar.Close)
-		equity := cash + float64(shares)*bar.Close
+	for i, signalBar := range filtered {
+		closes = append(closes, signalBar.Close)
+		equity := cash + float64(shares)*signalBar.Close
 		if equity > peakEquity {
 			peakEquity = equity
 		}
@@ -2395,19 +2395,22 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 		}
 
 		equityCurve = append(equityCurve, backtestTrade{
-			Date:   bar.Date,
-			Action: "MARK",
-			Price:  bar.Close,
-			Shares: shares,
-			Cash:   cash,
-			Equity: equity,
+			Date:          signalBar.Date,
+			SignalDate:    signalBar.Date,
+			ExecutionDate: signalBar.Date,
+			Action:        "MARK",
+			Price:         signalBar.Close,
+			Shares:        shares,
+			Cash:          cash,
+			Equity:        equity,
 		})
 
-		if i+1 < longWindow {
+		if i+1 < longWindow || i+1 >= len(filtered) {
 			continue
 		}
 
-		prevClose := bar.Close
+		execBar := filtered[i+1]
+		prevClose := signalBar.Close
 		if i > 0 {
 			prevClose = filtered[i-1].Close
 		}
@@ -2417,7 +2420,7 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 		action := ""
 		reason := ""
 
-		if shares > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
+		if shares > 0 && signalBar.Close <= entryPrice*(1-risk.StopLossPct) {
 			action = "SELL"
 			reason = fmt.Sprintf("stop loss triggered at %.2f%%", risk.StopLossPct*100)
 		} else if shares == 0 && shortMA > longMA {
@@ -2430,12 +2433,12 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 
 		switch action {
 		case "BUY":
-			if isBuyRestricted(symbol, name, bar) || gapOpenMove(prevClose, bar) >= runtimeConfig.Portfolio.GapOpenThreshold {
+			if isBuyRestricted(symbol, name, execBar) || gapOpenMove(prevClose, execBar) >= runtimeConfig.Portfolio.GapOpenThreshold {
 				continue
 			}
-			execPrice := math.Max(bar.Open, bar.Close) * (1 + slippageRate)
+			execPrice := execBar.Open * (1 + slippageRate)
 			buyShares := int(cash / (execPrice * (1 + feeRateBuy)))
-			capacity := capacityLimitedShares(bar, runtimeConfig.Portfolio.CapacityTurnoverShare)
+			capacity := capacityLimitedShares(execBar, runtimeConfig.Portfolio.CapacityTurnoverShare)
 			if capacity > 0 && buyShares > capacity {
 				buyShares = capacity
 			}
@@ -2447,29 +2450,31 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 			totalFees += fee
 			shares = buyShares
 			entryPrice = execPrice
-			entryDate = bar.Date
+			entryDate = execBar.Date
 			trades = append(trades, backtestTrade{
-				Date:   bar.Date,
-				Action: action,
-				Price:  execPrice,
-				Shares: buyShares,
-				Fee:    fee,
-				Cash:   cash,
-				Equity: cash + float64(shares)*bar.Close,
-				Reason: reason,
+				Date:          execBar.Date,
+				SignalDate:    signalBar.Date,
+				ExecutionDate: execBar.Date,
+				Action:        action,
+				Price:         execPrice,
+				Shares:        buyShares,
+				Fee:           fee,
+				Cash:          cash,
+				Equity:        cash + float64(shares)*execBar.Close,
+				Reason:        reason,
 			})
 		case "SELL":
 			if shares <= 0 {
 				continue
 			}
-			if runtimeConfig.Market.AShareT1 && entryDate == bar.Date {
+			if runtimeConfig.Market.AShareT1 && entryDate == execBar.Date {
 				continue
 			}
-			if isSellRestricted(symbol, name, bar) || gapOpenMove(prevClose, bar) <= -runtimeConfig.Portfolio.GapOpenThreshold {
+			if isSellRestricted(symbol, name, execBar) || gapOpenMove(prevClose, execBar) <= -runtimeConfig.Portfolio.GapOpenThreshold {
 				continue
 			}
-			execPrice := math.Min(bar.Open, bar.Close) * (1 - slippageRate)
-			capacity := capacityLimitedShares(bar, runtimeConfig.Portfolio.CapacityTurnoverShare)
+			execPrice := execBar.Open * (1 - slippageRate)
+			capacity := capacityLimitedShares(execBar, runtimeConfig.Portfolio.CapacityTurnoverShare)
 			sellShares := shares
 			if capacity > 0 && sellShares > capacity {
 				sellShares = capacity
@@ -2490,14 +2495,16 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 				entryDate = ""
 			}
 			trades = append(trades, backtestTrade{
-				Date:   bar.Date,
-				Action: action,
-				Price:  execPrice,
-				Shares: sellShares,
-				Fee:    fee,
-				Cash:   cash,
-				Equity: cash + float64(shares-sellShares)*bar.Close,
-				Reason: reason,
+				Date:          execBar.Date,
+				SignalDate:    signalBar.Date,
+				ExecutionDate: execBar.Date,
+				Action:        action,
+				Price:         execPrice,
+				Shares:        sellShares,
+				Fee:           fee,
+				Cash:          cash,
+				Equity:        cash + float64(shares-sellShares)*execBar.Close,
+				Reason:        reason,
 			})
 			shares -= sellShares
 			if shares <= 0 {
@@ -2519,28 +2526,32 @@ func simulateBacktest(symbol string, name string, bars []marketBar, mode string,
 	annualizedReturn := annualizeReturn(finalEquity/initialCash, len(filtered))
 
 	return backtestResult{
-		Symbol:            symbol,
-		Name:              name,
-		FromDate:          fromDate,
-		ToDate:            toDate,
-		InitialCash:       initialCash,
-		FinalEquity:       finalEquity,
-		TotalReturn:       (finalEquity - initialCash) / initialCash,
-		MaxDrawdown:       maxDrawdown,
-		TradeCount:        len(trades),
-		WinRate:           winRate,
-		Mode:              mode,
-		FeeBps:            feeBps,
-		SlippageBps:       slippageBps,
-		TotalFees:         totalFees,
-		AnnualizedReturn:  annualizedReturn,
-		BenchmarkReturn:   benchmarkReturn,
-		BenchmarkEquity:   benchmarkEquity,
-		BenchmarkDrawdown: benchmarkDrawdown,
-		ExcessReturn:      ((finalEquity - initialCash) / initialCash) - benchmarkReturn,
-		TradingDays:       len(filtered),
-		Trades:            trades,
-		EquityCurve:       equityCurve,
+		Symbol:                      symbol,
+		Name:                        name,
+		FromDate:                    fromDate,
+		ToDate:                      toDate,
+		InitialCash:                 initialCash,
+		FinalEquity:                 finalEquity,
+		TotalReturn:                 (finalEquity - initialCash) / initialCash,
+		MaxDrawdown:                 maxDrawdown,
+		TradeCount:                  len(trades),
+		WinRate:                     winRate,
+		Mode:                        mode,
+		FeeBps:                      feeBps,
+		SlippageBps:                 slippageBps,
+		TotalFees:                   totalFees,
+		AnnualizedReturn:            annualizedReturn,
+		BenchmarkReturn:             benchmarkReturn,
+		BenchmarkEquity:             benchmarkEquity,
+		BenchmarkDrawdown:           benchmarkDrawdown,
+		ExcessReturn:                ((finalEquity - initialCash) / initialCash) - benchmarkReturn,
+		TradingDays:                 len(filtered),
+		SignalDateBasis:             "close_t",
+		ExecutionDateBasis:          "open_t_plus_1",
+		SameBarExecution:            false,
+		DegradedExecutionAssumption: false,
+		Trades:                      trades,
+		EquityCurve:                 equityCurve,
 	}, nil
 }
 
