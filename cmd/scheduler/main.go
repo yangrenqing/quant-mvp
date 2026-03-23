@@ -1460,7 +1460,12 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 					targetValue += float64(shares) * bar.Close
 				}
 			}
-			targetSlots := len(candidates)
+			executionCandidates := make([]scanCandidate, 0, len(targetSet))
+			for _, candidate := range targetSet {
+				executionCandidates = append(executionCandidates, candidate)
+			}
+			sort.Slice(executionCandidates, func(i, j int) bool { return executionCandidates[i].Symbol < executionCandidates[j].Symbol })
+			targetSlots := len(executionCandidates)
 			if targetSlots < portfolio.MinHoldings {
 				targetSlots = portfolio.MinHoldings
 			}
@@ -1475,7 +1480,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				slotValue = maxSlotValue
 			}
 
-			for _, candidate := range candidates {
+			for _, candidate := range executionCandidates {
 				bar, ok := barBySymbolDate[candidate.Symbol][date]
 				if !ok {
 					continue
