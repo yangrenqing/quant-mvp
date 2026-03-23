@@ -2,6 +2,24 @@
 
 ## 2026-03-23
 
+### feature/backtest-trust-next-bar-portfolio · portfolio execution-candidate alignment
+- 背景：pending-target scaffold 已存在，但 rebalance 执行侧仍在迭代 same-day candidates，需要真正切到 carried pending target set。
+- 已做：
+  - 将 portfolio rebalance 执行集合从 same-day `candidates` 改为基于 carried `pendingTargetSet` 派生的 `executionCandidates`
+  - 保持该 slice 仅收紧执行对象，不额外扩 scope
+- 主要文件：
+  - `cmd/scheduler/main.go`
+- 验证：
+  - `/usr/local/go/bin/gofmt -w cmd/scheduler/main.go`
+  - `/usr/local/go/bin/go test ./...`
+- 当前状态：已提交并 push
+- 合并状态：未合并进 `master`
+- 下一步：
+  - review remaining same-day valuation / execution seams
+  - decide the next smallest auditable portfolio next-bar slice
+
+## 2026-03-23
+
 ### feature/backtest-trust-next-bar-portfolio · portfolio signal/snapshot semantics
 - 背景：pending-target scaffold 让 portfolio backtest 具备了 day-t signal / day-t+1 execution 的桥接骨架，但 snapshot/report 语义还不够显式。
 - 已做：
