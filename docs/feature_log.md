@@ -2,6 +2,25 @@
 
 ## 2026-03-23
 
+### feature/backtest-trust-next-bar-portfolio · portfolio signal/snapshot semantics
+- 背景：pending-target scaffold 让 portfolio backtest 具备了 day-t signal / day-t+1 execution 的桥接骨架，但 snapshot/report 语义还不够显式。
+- 已做：
+  - 给 `portfolioSnapshot` 增加 `signal_date` / `execution_date`
+  - snapshot 生成时将 carried `pendingSignalDate` 写入 `signal_date`，并把当前 `date` 作为 `execution_date`
+  - 更新 portfolio text/html 报告，显式展示 latest signal date / latest execution date
+- 主要文件：
+  - `cmd/scheduler/main.go`
+- 验证：
+  - `/usr/local/go/bin/gofmt -w cmd/scheduler/main.go`
+  - `/usr/local/go/bin/go test ./...`
+- 当前状态：已提交并 push
+- 合并状态：未合并进 `master`
+- 下一步：
+  - decide the next smallest portfolio next-bar slice
+  - keep docs/reports resume points aligned with remote state
+
+## 2026-03-23
+
 ### feature/backtest-trust-next-bar-portfolio · portfolio pending-target scaffold
 - 背景：single-name next-bar 已收口后，当前最高杠杆风险转到 portfolio backtest 的 same-day rank/fill coupling。
 - 已做：

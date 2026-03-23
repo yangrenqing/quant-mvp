@@ -1,6 +1,6 @@
 # Quant MVP NOW
 
-Updated: 2026-03-23 12:27 Asia/Shanghai
+Updated: 2026-03-23 17:23 Asia/Shanghai
 
 ## 当前状态
 - repo: `/Users/yangrenqing/Downloads/quant-mvp`
@@ -8,29 +8,30 @@ Updated: 2026-03-23 12:27 Asia/Shanghai
 - baseline commit: `756661a`
 - mode: `autopilot active`
 - sprint: `quant-mvp-72h`
-- phase: `phase5-next-bar-portfolio-pending-target-scaffold-validated`
+- phase: `phase5-next-bar-portfolio-signal-snapshot-committed-pushed`
 
 ## 当前主线 feature
-### `feature/backtest-trust-next-bar-portfolio` · portfolio next-bar execution
+### `feature/backtest-trust-next-bar-portfolio` · portfolio signal/snapshot semantics
 目标：
 - backtest trustworthiness
-- remove same-day rank/fill coupling in portfolio backtests
+- make portfolio snapshots/report semantics reflect day-t signal and day-t+1 execution more explicitly
 
 ## 最近已完成
-- single-name next-bar slice 已提交：`0b3ea50`
-- portfolio backtest 已引入第一层 `pendingTargetSet` 桥接骨架
-- 当前日开始计算 next target set，执行侧开始读取 carried pending target set
+- `pendingTargetSet` 桥接骨架已提交：`77a910f`
+- `portfolioSnapshot` 新增 `signal_date` / `execution_date`
+- portfolio text/html 报告新增 latest signal / execution date 展示
 - `gofmt` + `/usr/local/go/bin/go test ./...` 已通过
+- signal/snapshot semantics slice 已提交并 push：`d114ee5`
 
 ## 当前最小实现方向
-1. 复核 pending-target scaffold 是否已完整体现 day-t 信号 / day-t+1 执行
-2. 补 `pending signal metadata` 与 snapshot/report 语义
-3. 在不扩 scope 的前提下继续收紧 portfolio next-bar 语义闭环
+1. 复核当前 signal/execution 语义是否已足够支撑 portfolio next-bar 的阶段验收
+2. 判断下一片是继续补 richer execution provenance，还是先切回 compare / trust / docs 收口
+3. 保持 reports/docs resume points 与远端分支状态一致
 
 ## 下一步动作
-1. review the validated pending-target scaffold in `runPortfolioBacktest`
-2. extend the portfolio slice to carry pending signal metadata and align snapshot/report semantics
-3. sync docs/reports resume points after the next validated portfolio step
+1. decide the next smallest portfolio next-bar slice after the remote-backed checkpoint
+2. realign reports/docs resume points to reflect committed+pushed state
+3. continue only with another tightly scoped, auditable slice
 
 ## 关键入口
 - 当前交接：`docs/backtest_next_bar_handoff.md`
@@ -40,4 +41,4 @@ Updated: 2026-03-23 12:27 Asia/Shanghai
 - feature 台账：`docs/feature_log.md`
 
 ## 一句话判断
-portfolio next-bar 已从“骨架复盘”推进到“pending-target 桥接骨架已验证”，下一步应把 signal metadata 和 snapshot 语义补齐，形成真正的 day-t / day-t+1 闭环。
+portfolio next-bar 已从桥接骨架推进到 signal/snapshot 语义已提交并推上 GitHub，当前进入“下一片该不该继续切”的判断点。
