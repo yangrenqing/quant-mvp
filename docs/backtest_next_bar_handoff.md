@@ -150,16 +150,19 @@ Refactor hint:
 
 Current coupling points:
 - candidate ranking on `1284-1325`
-- same-day target set creation on `1331-1334`
-- same-day liquidation logic on `1350-1426`
-- same-day rebalance logic on `1428-1545`
+- same-day target set creation on `1331-1334` **(already removed via pending target carry)**
+- same-day liquidation logic on `1350-1426` **(still same-day execution on current bar)**
+- same-day rebalance logic on `1428-1545` **(still same-day execution on current bar)**
+- snapshot signal/execution fields near `1588-1601` **(already split, but only reporting-level split for the remaining liquidation/rebalance paths)**
 
 Refactor hint:
-- introduce:
+- existing state already has:
   - `pendingTargetSet map[string]scanCandidate`
   - `pendingSignalDate string`
-- first day only builds pending targets; no immediate fill
-- each loop day executes prior pending targets, then computes the next pending set
+- first day now builds pending targets with no immediate fill
+- each loop day now executes prior pending targets, then computes the next pending set
+- **remaining trust gap** is narrower now: stop-loss / max-drawdown exits and rebalance buy/sell sizing still execute against the current loop day's bar, so behavior is not yet fully `signal_t -> execution_t+1`
+- safest next slice is to audit these residual execution points into one explicit seam list, then convert them in a tightly scoped patch
 
 ---
 
