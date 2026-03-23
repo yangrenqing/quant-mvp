@@ -1,9 +1,9 @@
 # Next-Bar Execution Handoff
 
-Updated: 2026-03-23 05:49 Asia/Shanghai
+Updated: 2026-03-24 06:31 Asia/Shanghai
 Repo: `/Users/yangrenqing/Downloads/quant-mvp`
-Branch: `docs/backtest-next-bar-handoff`
-Resume baseline: `d1141c7` on `feature/evolution-gates-compare-artifact-sync`
+Branch: `feature/backtest-trust-next-bar-seam-audit`
+Resume baseline: follow `reports/sprint72_status.json` + `reports/cc_autopilot_status.json` for the latest pushed checkpoint on this branch
 
 ## Purpose
 

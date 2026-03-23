@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "Residual same-day portfolio seams now have exact code anchors, a pending-exit state-machine model, and an explicit post-patch semantic validation checklist.",
+  "lastSummary": "Next-bar handoff header is now aligned to the active seam-audit branch and current status files, removing an outdated resume baseline before the code conversion step.",
   "nextAction": "Implement the pending-exit + pending-target t+1 execution flow for the six residual execution points, then validate against the documented semantic checklist.",
-  "updatedAt": "2026-03-24T06:01:00+08:00"
+  "updatedAt": "2026-03-24T06:31:00+08:00"
 }
