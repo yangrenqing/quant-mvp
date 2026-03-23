@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "Residual same-day portfolio seams now have both exact code anchors and a minimal pending-exit state-machine model, reducing the next patch's design ambiguity.",
-  "nextAction": "Implement the pending-exit + pending-target t+1 execution flow for the six residual execution points, then validate snapshot/trade semantics.",
-  "updatedAt": "2026-03-24T05:31:00+08:00"
+  "lastSummary": "Residual same-day portfolio seams now have exact code anchors, a pending-exit state-machine model, and an explicit post-patch semantic validation checklist.",
+  "nextAction": "Implement the pending-exit + pending-target t+1 execution flow for the six residual execution points, then validate against the documented semantic checklist.",
+  "updatedAt": "2026-03-24T06:01:00+08:00"
 }

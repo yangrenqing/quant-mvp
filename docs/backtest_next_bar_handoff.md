@@ -230,6 +230,12 @@ This will make trust comparisons much easier than inferring from code.
 - rerun portfolio backtest
 - inspect first several snapshot/trade transitions manually
 - compare return / drawdown delta against prior artifact
+- explicitly verify these semantics after the pending-exit conversion:
+  - no sell/buy triggered by close on day `t` is executed with day `t` pricing
+  - a stop-loss / drawdown / trend-break / drop-out detected on `t` first appears as an executed exit on `t+1`
+  - rebalance trim/add actions consume the carried pending sets rather than same-day ranking output
+  - snapshot `signal_date` stays at the prior decision day while `execution_date` equals the current loop day
+  - terminal day with no `t+1` does not create a phantom execution
 
 ---
 
