@@ -1,6 +1,6 @@
 # Quant MVP NOW
 
-Updated: 2026-03-23 11:20 Asia/Shanghai
+Updated: 2026-03-23 12:27 Asia/Shanghai
 
 ## 当前状态
 - repo: `/Users/yangrenqing/Downloads/quant-mvp`
@@ -8,7 +8,7 @@ Updated: 2026-03-23 11:20 Asia/Shanghai
 - baseline commit: `756661a`
 - mode: `autopilot active`
 - sprint: `quant-mvp-72h`
-- phase: `phase5-next-bar-portfolio-state-machine-reviewed`
+- phase: `phase5-next-bar-portfolio-pending-target-scaffold-validated`
 
 ## 当前主线 feature
 ### `feature/backtest-trust-next-bar-portfolio` · portfolio next-bar execution
@@ -18,18 +18,19 @@ Updated: 2026-03-23 11:20 Asia/Shanghai
 
 ## 最近已完成
 - single-name next-bar slice 已提交：`0b3ea50`
-- portfolio 分支骨架已确认：候选选择、same-day `targetSet`、清仓块、调仓块、snapshot 块都已重新定位
-- 状态文件已写回：下一步直接接 `pendingTargetSet` / `pendingSignalDate` 骨架
+- portfolio backtest 已引入第一层 `pendingTargetSet` 桥接骨架
+- 当前日开始计算 next target set，执行侧开始读取 carried pending target set
+- `gofmt` + `/usr/local/go/bin/go test ./...` 已通过
 
 ## 当前最小实现方向
-1. 在 `runPortfolioBacktest` 中把“信号形成”和“执行成交”拆开
-2. 引入 `pendingTargetSet` / `pendingSignalDate` 之类的下一交易日执行桥接状态
-3. 先保证不再出现 same-day rank-and-fill，再做报告字段对齐
+1. 复核 pending-target scaffold 是否已完整体现 day-t 信号 / day-t+1 执行
+2. 补 `pending signal metadata` 与 snapshot/report 语义
+3. 在不扩 scope 的前提下继续收紧 portfolio next-bar 语义闭环
 
 ## 下一步动作
-1. introduce `pendingTargetSet` / `pendingSignalDate` scaffolding in `runPortfolioBacktest`
-2. validate with gofmt and `/usr/local/go/bin/go test ./...`
-3. align docs/reports resume points after the first validated portfolio slice
+1. review the validated pending-target scaffold in `runPortfolioBacktest`
+2. extend the portfolio slice to carry pending signal metadata and align snapshot/report semantics
+3. sync docs/reports resume points after the next validated portfolio step
 
 ## 关键入口
 - 当前交接：`docs/backtest_next_bar_handoff.md`
@@ -39,4 +40,4 @@ Updated: 2026-03-23 11:20 Asia/Shanghai
 - feature 台账：`docs/feature_log.md`
 
 ## 一句话判断
-单标的 next-bar 已收口，当前最高杠杆风险仍是 portfolio backtest 的 same-day rebalance 耦合；现在已完成骨架复盘，下一步应直接落 pending-target 桥接状态。
+portfolio next-bar 已从“骨架复盘”推进到“pending-target 桥接骨架已验证”，下一步应把 signal metadata 和 snapshot 语义补齐，形成真正的 day-t / day-t+1 闭环。

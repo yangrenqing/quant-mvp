@@ -1289,6 +1289,8 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 	latestSelection := make([]scanCandidate, 0)
 	lastRegimeLabel := "neutral"
 	lastExposureLevel := 1.0
+	pendingTargetSet := map[string]scanCandidate{}
+	pendingReserveCandidates := make([]scanCandidate, 0)
 
 	for dayIdx, date := range dates {
 		candidates := make([]scanCandidate, 0, len(series))
@@ -1333,14 +1335,20 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		rankedCandidates := append([]scanCandidate(nil), candidates...)
 		candidates = selectPortfolioCandidates(candidates, topN, portfolio.MinHoldings, portfolio, regimeLabel)
 		reserveCandidates := reservePortfolioCandidates(rankedCandidates, candidates, portfolio.ReserveCandidates)
-		if len(candidates) > 0 {
-			latestSelection = append([]scanCandidate(nil), candidates...)
-			latestSelection = append(latestSelection, reserveCandidates...)
+
+		targetSet := pendingTargetSet
+		if len(targetSet) > 0 {
+			latestSelection = make([]scanCandidate, 0, len(targetSet)+len(pendingReserveCandidates))
+			for _, candidate := range targetSet {
+				latestSelection = append(latestSelection, candidate)
+			}
+			sort.Slice(latestSelection, func(i, j int) bool { return latestSelection[i].Symbol < latestSelection[j].Symbol })
+			latestSelection = append(latestSelection, pendingReserveCandidates...)
 		}
 
-		targetSet := make(map[string]scanCandidate, len(candidates))
+		nextTargetSet := make(map[string]scanCandidate, len(candidates))
 		for _, candidate := range candidates {
-			targetSet[candidate.Symbol] = candidate
+			nextTargetSet[candidate.Symbol] = candidate
 		}
 
 		dayEquity := cash
@@ -1373,8 +1381,12 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if bar.Close > holdingPeaks[symbol] {
 				holdingPeaks[symbol] = bar.Close
 			}
+			holdingName := ""
+			if candidate, ok := targetSet[symbol]; ok {
+				holdingName = candidate.Name
+			}
 			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
-				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, targetSet[symbol].Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, holdingName, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
@@ -1389,7 +1401,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
-				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, targetSet[symbol].Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
+				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, holdingName, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 					continue
 				}
 				execPrice := bar.Close * (1 - slippageRate)
@@ -1435,7 +1447,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			rebalanceCount++
 		}
 
-		if len(candidates) > 0 && shouldRebalance {
+		if len(targetSet) > 0 && shouldRebalance {
 			targetValue := cash
 			for symbol, shares := range holdings {
 				if shares <= 0 {
@@ -1581,6 +1593,9 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			Holdings: holdingsList,
 		})
 
+		pendingTargetSet = nextTargetSet
+		pendingReserveCandidates = append([]scanCandidate(nil), reserveCandidates...)
+
 		if equity > peakEquity {
 			peakEquity = equity
 		}
@@ -1611,27 +1626,31 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 	}
 
 	return portfolioBacktestResult{
-		FromDate:         fromDate,
-		ToDate:           toDate,
-		InitialCash:      initialCash,
-		FinalEquity:      finalEquity,
-		TotalReturn:      (finalEquity - initialCash) / initialCash,
-		AnnualizedReturn: annualizeReturn(finalEquity/initialCash, len(snapshots)),
-		BenchmarkReturn:  benchmarkReturn,
-		ExcessReturn:     ((finalEquity - initialCash) / initialCash) - benchmarkReturn,
-		MaxDrawdown:      maxDrawdown,
-		Mode:             mode,
-		FeeBps:           feeBps,
-		SlippageBps:      slippageBps,
-		RebalanceCount:   rebalanceCount,
-		TradingDays:      len(snapshots),
-		Positions:        topN,
-		Snapshots:        snapshots,
-		BenchmarkCurve:   benchmarkCurve,
-		LatestSelection:  latestSelection,
-		CurrentHoldings:  currentHoldings,
-		ExposureLevel:    lastExposureLevel,
-		RegimeLabel:      lastRegimeLabel,
+		FromDate:                    fromDate,
+		ToDate:                      toDate,
+		InitialCash:                 initialCash,
+		FinalEquity:                 finalEquity,
+		TotalReturn:                 (finalEquity - initialCash) / initialCash,
+		AnnualizedReturn:            annualizeReturn(finalEquity/initialCash, len(snapshots)),
+		BenchmarkReturn:             benchmarkReturn,
+		ExcessReturn:                ((finalEquity - initialCash) / initialCash) - benchmarkReturn,
+		MaxDrawdown:                 maxDrawdown,
+		Mode:                        mode,
+		FeeBps:                      feeBps,
+		SlippageBps:                 slippageBps,
+		RebalanceCount:              rebalanceCount,
+		TradingDays:                 len(snapshots),
+		Positions:                   topN,
+		SignalDateBasis:             "close_t",
+		ExecutionDateBasis:          "open_t_plus_1",
+		SameBarExecution:            false,
+		DegradedExecutionAssumption: false,
+		Snapshots:                   snapshots,
+		BenchmarkCurve:              benchmarkCurve,
+		LatestSelection:             latestSelection,
+		CurrentHoldings:             currentHoldings,
+		ExposureLevel:               lastExposureLevel,
+		RegimeLabel:                 lastRegimeLabel,
 	}, nil
 }
 

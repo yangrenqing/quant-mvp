@@ -2,6 +2,23 @@
 
 ## 2026-03-23
 
+### feature/backtest-trust-next-bar-portfolio · portfolio pending-target scaffold
+- 背景：single-name next-bar 已收口后，当前最高杠杆风险转到 portfolio backtest 的 same-day rank/fill coupling。
+- 已做：
+  - 在 `runPortfolioBacktest` 中引入第一层 `pendingTargetSet` / `pendingReserveCandidates` 桥接状态
+  - 当天继续计算新的候选与 next target set，但执行侧开始读取 carried pending target set
+  - `portfolioBacktestResult` 的 execution metadata 切到 `close_t` / `open_t_plus_1` / `same_bar_execution=false`
+  - 用 `/usr/local/go/bin/gofmt -w cmd/scheduler/main.go` 与 `/usr/local/go/bin/go test ./...` 完成验证
+- 主要文件：
+  - `cmd/scheduler/main.go`
+- 当前状态：已验证，待继续补 signal metadata / snapshot 语义
+- 合并状态：未合并进 `master`
+- 下一步：
+  - review scaffold against day-t signal / day-t+1 execution semantics
+  - extend pending signal metadata and snapshot/report semantics
+
+## 2026-03-23
+
 ### feature/backtest-trust-next-bar-single · single-name next-bar execution
 - 背景：在 execution metadata slice 说清当前假设后，下一步先把单标的 backtest 从 same-bar decision/execution 改成 next-bar execution，降低最直接的时序泄漏。
 - 已做：
