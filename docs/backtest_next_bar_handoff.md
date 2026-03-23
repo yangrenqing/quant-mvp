@@ -162,7 +162,14 @@ Refactor hint:
 - first day now builds pending targets with no immediate fill
 - each loop day now executes prior pending targets, then computes the next pending set
 - **remaining trust gap** is narrower now: stop-loss / max-drawdown exits and rebalance buy/sell sizing still execute against the current loop day's bar, so behavior is not yet fully `signal_t -> execution_t+1`
-- safest next slice is to audit these residual execution points into one explicit seam list, then convert them in a tightly scoped patch
+- residual seam anchors now confirmed in `cmd/scheduler/main.go`:
+  - stop-loss exit: `1391-1399`
+  - max-holding-drawdown exit: `1406-1414`
+  - target-set SELL exit: `1421-1429`
+  - drop-out liquidation exit: `1437-1446`
+  - rebalance trim sell path: `1517-1536`
+  - rebalance add/buy path: `1542-1563`
+- safest next slice is to convert exactly these residual execution points in one tightly scoped patch, without widening into paper/live execution
 
 ---
 
