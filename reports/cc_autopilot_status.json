@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "Residual same-day liquidation/rebalance seams are now anchored to exact cmd/scheduler/main.go ranges, so the next-bar portfolio conversion has a tighter execution map.",
-  "nextAction": "Convert the six anchored residual execution points to true t+1 execution, then validate portfolio snapshot/trade semantics against the pushed checkpoint.",
-  "updatedAt": "2026-03-24T05:01:00+08:00"
+  "lastSummary": "Residual same-day portfolio seams now have both exact code anchors and a minimal pending-exit state-machine model, reducing the next patch's design ambiguity.",
+  "nextAction": "Implement the pending-exit + pending-target t+1 execution flow for the six residual execution points, then validate snapshot/trade semantics.",
+  "updatedAt": "2026-03-24T05:31:00+08:00"
 }

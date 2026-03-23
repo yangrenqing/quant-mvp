@@ -171,6 +171,28 @@ Refactor hint:
   - rebalance add/buy path: `1542-1563`
 - safest next slice is to convert exactly these residual execution points in one tightly scoped patch, without widening into paper/live execution
 
+### Recommended residual conversion model
+
+To finish the portfolio path without reopening broader design questions, prefer a minimal state-machine extension over another in-place same-day patch.
+
+Suggested additions:
+- keep existing `pendingTargetSet` / `pendingSignalDate`
+- add `pendingExitSet map[string]string` keyed by symbol with exit reason (`stop_loss`, `max_drawdown`, `trend_break`, `drop_out`)
+- treat all residual liquidation/rebalance actions as **signals formed on close_t, executed on t+1**
+
+Suggested loop order per trading date `t`:
+1. execute prior `pendingExitSet` against bar `t`
+2. execute prior `pendingTargetSet` rebalance against bar `t`
+3. mark holdings / equity snapshot for execution date `t`
+4. evaluate fresh close-based exit signals from bar `t` and populate next `pendingExitSet`
+5. evaluate ranking / target weights from bar `t` and populate next `pendingTargetSet`
+6. store `pendingSignalDate = t`
+
+This keeps the patch narrow because:
+- stop-loss / drawdown / trend-break / drop-out all share the same pending-exit mechanism
+- trim-sell / add-buy continue to share the existing pending-target rebalance mechanism
+- reporting semantics stay aligned: `signal_date` comes from the pending set origin, `execution_date` is the current loop date
+
 ---
 
 ## 5. Reporting fields to add

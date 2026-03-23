@@ -6,9 +6,9 @@
   "baselineCommit": "756661a",
   "status": "in_progress",
   "currentPhase": "phase5-next-bar-portfolio-residual-seams-audited",
-  "lastUpdatedAt": "2026-03-24T05:01:00+08:00",
+  "lastUpdatedAt": "2026-03-24T05:31:00+08:00",
   "nextActions": [
-    "convert the six anchored residual same-day liquidation/rebalance execution points to a true signal_t -> execution_t+1 path",
+    "implement the pending-exit + pending-target state-machine needed to convert the six anchored residual execution points to true signal_t -> execution_t+1",
     "validate portfolio snapshot/trade semantics after the residual seam conversion",
     "keep reports/docs resume points aligned with committed+pushed branch state"
   ],
@@ -55,7 +55,8 @@
     "portfolio execution-candidate alignment slice committed as fd1e3e2 and pushed to origin/feature/backtest-trust-next-bar-portfolio",
     "execution-candidate checkpoint docs synced and pushed as 97aa4ba",
     "residual same-day liquidation/rebalance seams re-audited; next slice narrowed to true t+1 execution conversion",
-    "residual execution points anchored to six exact cmd/scheduler/main.go ranges for the next patch"
+    "residual execution points anchored to six exact cmd/scheduler/main.go ranges for the next patch",
+    "minimal pending-exit state-machine model documented to reduce next-bar portfolio conversion ambiguity"
   ],
   "blocked": []
 }
