@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "Residual portfolio next-bar conversion is now implemented locally in cmd/scheduler/main.go: pending exits and carried rebalance targets execute on later trading days, and /usr/local/go/bin/go test ./... passes.",
-  "nextAction": "Commit and push the residual next-bar conversion checkpoint, then run the documented semantic checklist with a fresh portfolio backtest/manual transition review.",
+  "lastSummary": "Residual portfolio next-bar conversion is now committed and pushed on feature/backtest-trust-next-bar-seam-audit as 2e87a7a, with pending exits/carried rebalance execution and passing go test ./....",
+  "nextAction": "Run the documented semantic checklist with a fresh portfolio backtest/manual transition review, then sync any resulting artifacts/docs to this pushed checkpoint.",
   "updatedAt": "2026-03-24T09:19:00+08:00"
 }

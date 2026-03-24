@@ -5,11 +5,11 @@
   "repo": "/Users/yangrenqing/Downloads/quant-mvp",
   "baselineCommit": "756661a",
   "status": "in_progress",
-  "currentPhase": "phase5-next-bar-portfolio-residual-seams-audited",
-  "lastUpdatedAt": "2026-03-24T06:31:00+08:00",
+  "currentPhase": "phase5-next-bar-portfolio-residual-conversion-pushed",
+  "lastUpdatedAt": "2026-03-24T09:19:00+08:00",
   "nextActions": [
-    "implement the pending-exit + pending-target state-machine needed to convert the six anchored residual execution points to true signal_t -> execution_t+1",
-    "validate portfolio snapshot/trade semantics against the documented semantic checklist after the residual seam conversion",
+    "validate portfolio snapshot/trade semantics against the documented semantic checklist with a fresh portfolio backtest/manual transition review",
+    "sync any resulting artifacts/docs to the pushed checkpoint 2e87a7a",
     "keep reports/docs resume points aligned with committed+pushed branch state"
   ],
   "completed": [
@@ -59,7 +59,8 @@
     "minimal pending-exit state-machine model documented to reduce next-bar portfolio conversion ambiguity",
     "post-patch semantic validation checklist documented for the residual next-bar conversion",
     "next-bar handoff header aligned to the active seam-audit branch and current resume status files",
-    "residual portfolio next-bar conversion implemented locally with pending exits/carried rebalance execution and passing go test ./..."
+    "residual portfolio next-bar conversion implemented locally with pending exits/carried rebalance execution and passing go test ./...",
+    "residual portfolio next-bar conversion committed and pushed as 2e87a7a on feature/backtest-trust-next-bar-seam-audit"
   ],
   "blocked": []
 }
