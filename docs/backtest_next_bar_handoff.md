@@ -254,16 +254,21 @@ This keeps metric semantics changes isolated and reviewable.
 
 ## Bottom line
 
-The next-bar problem was the top backtest trust issue, and the portfolio residual conversion is now implemented locally on `feature/backtest-trust-next-bar-seam-audit`.
+The next-bar problem was the top backtest trust issue, and the portfolio residual conversion is now implemented, pushed, and first-pass validated on `feature/backtest-trust-next-bar-seam-audit`.
 
 Current status:
 1. execution assumption is exposed in artifacts
 2. single-name backtest next-bar conversion is done
-3. portfolio residual next-bar conversion is now implemented locally and validated with `go test ./...`
+3. portfolio residual next-bar conversion is pushed and first-pass validated on remote checkpoint `09dccb3`
+
+Validation evidence already captured:
+- `go test ./...` passed
+- fresh `portfolio_backtest` artifacts report `SignalDateBasis=close_t` and `ExecutionDateBasis=open_t_plus_1`
+- holding-change samples show explicit `t -> t+1` transitions such as `2025-01-23 -> 2025-01-24` and `2025-05-15 -> 2025-05-16`
 
 Immediate next step:
-- commit + push this checkpoint
-- then run the documented semantic checklist with a fresh portfolio backtest / transition review
+- sync this validation summary into the remaining docs/status surfaces that still lag
+- then decide whether the restricted/gap-blocked pending-exit caveat deserves its own follow-up slice
 
 Remaining caveat captured in code-path behavior:
 - if an exit is signaled on `t` but `t+1` is restricted / suspended / gap-blocked, the exit remains pending until a later executable trading day rather than forcing a phantom fill

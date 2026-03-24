@@ -60,11 +60,8 @@
     "post-patch semantic validation checklist documented for the residual next-bar conversion",
     "next-bar handoff header aligned to the active seam-audit branch and current resume status files",
     "residual portfolio next-bar conversion implemented locally with pending exits/carried rebalance execution and passing go test ./...",
-    "residual portfolio next-bar conversion committed and pushed as 2e87a7a on feature/backtest-trust-next-bar-seam-audit"
-  ],
-  "blocked": []
-}
-test first-pass validation confirmed close_t -> open_t_plus_1 semantics in snapshots/holding-change samples"
+    "residual portfolio next-bar conversion committed and pushed as 2e87a7a on feature/backtest-trust-next-bar-seam-audit",
+    "fresh portfolio backtest first-pass validation confirmed close_t -> open_t_plus_1 semantics in snapshots/holding-change samples"
   ],
   "blocked": []
 }
