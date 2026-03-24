@@ -6,10 +6,10 @@
   "baselineCommit": "756661a",
   "status": "in_progress",
   "currentPhase": "phase5-next-bar-portfolio-residual-conversion-first-pass-validated",
-  "lastUpdatedAt": "2026-03-24T09:23:00+08:00",
+  "lastUpdatedAt": "2026-03-24T09:29:00+08:00",
   "nextActions": [
-    "sync the semantic validation findings into docs/status artifacts on top of pushed checkpoint 90b22b9",
-    "decide whether the remaining restricted-gap pending-exit caveat needs an explicit follow-up slice",
+    "treat 10ac6c6 as the validated resume checkpoint for the portfolio next-bar work",
+    "leave the restricted/gap-blocked pending-exit behavior as an explicit documented caveat unless new evidence shows it is harmful",
     "keep reports/docs resume points aligned with committed+pushed branch state"
   ],
   "completed": [

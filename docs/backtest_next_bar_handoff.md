@@ -259,7 +259,7 @@ The next-bar problem was the top backtest trust issue, and the portfolio residua
 Current status:
 1. execution assumption is exposed in artifacts
 2. single-name backtest next-bar conversion is done
-3. portfolio residual next-bar conversion is pushed and first-pass validated on remote checkpoint `09dccb3`
+3. portfolio residual next-bar conversion is pushed and first-pass validated on remote checkpoint `10ac6c6`
 
 Validation evidence already captured:
 - `go test ./...` passed
@@ -267,8 +267,8 @@ Validation evidence already captured:
 - holding-change samples show explicit `t -> t+1` transitions such as `2025-01-23 -> 2025-01-24` and `2025-05-15 -> 2025-05-16`
 
 Immediate next step:
-- sync this validation summary into the remaining docs/status surfaces that still lag
-- then decide whether the restricted/gap-blocked pending-exit caveat deserves its own follow-up slice
+- use `10ac6c6` as the validated resume checkpoint for this line
+- only reopen this area if new evidence shows the restricted/gap-blocked pending-exit caveat is materially harmful
 
 Remaining caveat captured in code-path behavior:
 - if an exit is signaled on `t` but `t+1` is restricted / suspended / gap-blocked, the exit remains pending until a later executable trading day rather than forcing a phantom fill
