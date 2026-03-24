@@ -6,7 +6,7 @@
   "baselineCommit": "756661a",
   "status": "in_progress",
   "currentPhase": "phase5-next-bar-portfolio-residual-conversion-first-pass-validated",
-  "lastUpdatedAt": "2026-03-24T19:55:00+08:00",
+  "lastUpdatedAt": "2026-03-25T06:53:00+08:00",
   "nextActions": [
     "treat 10ac6c6 as the validated resume checkpoint for the portfolio next-bar work",
     "treat later branch commits (including 335ca1e quality-pullback trial work and subsequent docs-sync commits) as outside the validated next-bar slice unless separately revalidated",
