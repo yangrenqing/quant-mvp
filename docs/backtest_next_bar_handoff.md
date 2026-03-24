@@ -1,6 +1,6 @@
 # Next-Bar Execution Handoff
 
-Updated: 2026-03-24 06:31 Asia/Shanghai
+Updated: 2026-03-24 09:19 Asia/Shanghai
 Repo: `/Users/yangrenqing/Downloads/quant-mvp`
 Branch: `feature/backtest-trust-next-bar-seam-audit`
 Resume baseline: follow `reports/sprint72_status.json` + `reports/cc_autopilot_status.json` for the latest pushed checkpoint on this branch
@@ -254,10 +254,16 @@ This keeps metric semantics changes isolated and reviewable.
 
 ## Bottom line
 
-The next-bar problem is still the top backtest trust issue.
-But the safest path is:
-1. expose execution assumption in artifacts
-2. convert single-name backtest
-3. convert portfolio backtest
+The next-bar problem was the top backtest trust issue, and the portfolio residual conversion is now implemented locally on `feature/backtest-trust-next-bar-seam-audit`.
 
-That order gives maximum truthfulness per unit risk.
+Current status:
+1. execution assumption is exposed in artifacts
+2. single-name backtest next-bar conversion is done
+3. portfolio residual next-bar conversion is now implemented locally and validated with `go test ./...`
+
+Immediate next step:
+- commit + push this checkpoint
+- then run the documented semantic checklist with a fresh portfolio backtest / transition review
+
+Remaining caveat captured in code-path behavior:
+- if an exit is signaled on `t` but `t+1` is restricted / suspended / gap-blocked, the exit remains pending until a later executable trading day rather than forcing a phantom fill

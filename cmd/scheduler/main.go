@@ -1267,12 +1267,16 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 	}
 
 	barBySymbolDate := make(map[string]map[string]marketBar, len(series))
+	barsBySymbol := make(map[string][]marketBar, len(series))
+	symbolNames := make(map[string]string, len(series))
 	for _, item := range series {
 		dateMap := make(map[string]marketBar, len(item.bars))
 		for _, bar := range item.bars {
 			dateMap[bar.Date] = bar
 		}
 		barBySymbolDate[item.meta.Symbol] = dateMap
+		barsBySymbol[item.meta.Symbol] = item.bars
+		symbolNames[item.meta.Symbol] = item.meta.Name
 	}
 
 	feeRateBuy := effectiveFeeRate(false)
@@ -1292,8 +1296,12 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 	lastRegimeLabel := "neutral"
 	lastExposureLevel := 1.0
 	pendingTargetSet := map[string]scanCandidate{}
+	pendingTargetExposure := 1.0
+	pendingTargetRebalance := false
+	pendingExitSet := map[string]string{}
 	pendingReserveCandidates := make([]scanCandidate, 0)
 	pendingSignalDate := ""
+	pendingExitSignalDate := ""
 
 	for dayIdx, date := range dates {
 		candidates := make([]scanCandidate, 0, len(series))
@@ -1354,22 +1362,19 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			nextTargetSet[candidate.Symbol] = candidate
 		}
 
-		dayEquity := cash
-		for symbol, shares := range holdings {
-			if shares <= 0 {
-				continue
-			}
-			bar, ok := barBySymbolDate[symbol][date]
-			if !ok {
-				continue
-			}
-			dayEquity += float64(shares) * bar.Close
+		shouldRebalance := dayIdx == 0 || dayIdx%portfolio.RebalanceIntervalDays == 0
+		prevDate := previousTradingDate(dates, dayIdx)
+		executedSignalDate := pendingSignalDate
+		if executedSignalDate == "" {
+			executedSignalDate = date
+		}
+		snapshotSignalDate := executedSignalDate
+		if len(pendingExitSet) > 0 && pendingExitSignalDate != "" {
+			snapshotSignalDate = pendingExitSignalDate
 		}
 
-		shouldRebalance := dayIdx == 0 || dayIdx%portfolio.RebalanceIntervalDays == 0
-
-		// Always remove names that dropped out of the target set.
-		for symbol, shares := range holdings {
+		for symbol, reason := range pendingExitSet {
+			shares := holdings[symbol]
 			if shares <= 0 {
 				continue
 			}
@@ -1378,86 +1383,47 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 				continue
 			}
 			prevBar := bar
-			if prior, ok := barBySymbolDate[symbol][previousTradingDate(dates, dayIdx)]; ok {
-				prevBar = prior
-			}
-			if bar.Close > holdingPeaks[symbol] {
-				holdingPeaks[symbol] = bar.Close
-			}
-			holdingName := ""
-			if candidate, ok := targetSet[symbol]; ok {
-				holdingName = candidate.Name
-			}
-			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
-				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, holdingName, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
-					continue
+			if prevDate != "" {
+				if prior, ok := barBySymbolDate[symbol][prevDate]; ok {
+					prevBar = prior
 				}
-				execPrice := bar.Close * (1 - slippageRate)
-				fee := float64(shares) * execPrice * feeRateSell
-				cash += float64(shares)*execPrice - fee
-				holdings[symbol] = 0
-				delete(entryPrices, symbol)
-				delete(entryDates, symbol)
-				delete(holdingPeaks, symbol)
-				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
-				rebalanceCount++
+			}
+			name := symbolNames[symbol]
+			if candidate, ok := targetSet[symbol]; ok && candidate.Name != "" {
+				name = candidate.Name
+			}
+			if runtimeConfig.Market.AShareT1 && entryDates[symbol] == date {
 				continue
 			}
-			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
-				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, holdingName, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
-					continue
-				}
-				execPrice := bar.Close * (1 - slippageRate)
-				fee := float64(shares) * execPrice * feeRateSell
-				cash += float64(shares)*execPrice - fee
-				holdings[symbol] = 0
-				delete(entryPrices, symbol)
-				delete(entryDates, symbol)
-				delete(holdingPeaks, symbol)
-				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
-				rebalanceCount++
+			if isSellRestricted(symbol, name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
 				continue
 			}
-			if candidate, keep := targetSet[symbol]; keep && candidate.Action == "SELL" {
-				if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, candidate.Name, bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
-					continue
-				}
-				execPrice := bar.Close * (1 - slippageRate)
-				fee := float64(shares) * execPrice * feeRateSell
-				cash += float64(shares)*execPrice - fee
-				holdings[symbol] = 0
-				delete(entryPrices, symbol)
-				delete(entryDates, symbol)
-				delete(holdingPeaks, symbol)
-				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.TrendBreakCooldownDays)
-				rebalanceCount++
-				continue
-			}
-			if _, keep := targetSet[symbol]; keep {
-				continue
-			}
-			if (runtimeConfig.Market.AShareT1 && entryDates[symbol] == date) || isSellRestricted(symbol, "", bar) || gapOpenMove(prevBar.Close, bar) <= -portfolio.GapOpenThreshold {
-				continue
-			}
-			execPrice := bar.Close * (1 - slippageRate)
+			execPrice := bar.Open * (1 - slippageRate)
 			fee := float64(shares) * execPrice * feeRateSell
 			cash += float64(shares)*execPrice - fee
 			holdings[symbol] = 0
 			delete(entryPrices, symbol)
 			delete(entryDates, symbol)
 			delete(holdingPeaks, symbol)
-			cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.ExitCooldownDays)
+			switch reason {
+			case "stop_loss", "max_drawdown":
+				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.StopCooldownDays)
+			case "trend_break":
+				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.TrendBreakCooldownDays)
+			case "drop_out":
+				cooldownUntil[symbol] = portfolioCooldownDate(date, portfolio.ExitCooldownDays)
+			}
 			rebalanceCount++
 		}
 
-		if len(targetSet) > 0 && shouldRebalance {
+		if len(targetSet) > 0 && pendingTargetRebalance {
 			targetValue := cash
 			for symbol, shares := range holdings {
 				if shares <= 0 {
 					continue
 				}
 				if bar, ok := barBySymbolDate[symbol][date]; ok {
-					targetValue += float64(shares) * bar.Close
+					targetValue += float64(shares) * bar.Open
 				}
 			}
 			executionCandidates := make([]scanCandidate, 0, len(targetSet))
@@ -1469,7 +1435,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			if targetSlots < portfolio.MinHoldings {
 				targetSlots = portfolio.MinHoldings
 			}
-			effectiveCashShare := portfolio.MaxCashShare + (1 - targetExposure)
+			effectiveCashShare := portfolio.MaxCashShare + (1 - pendingTargetExposure)
 			if effectiveCashShare > 0.85 {
 				effectiveCashShare = 0.85
 			}
@@ -1481,27 +1447,32 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			}
 
 			for _, candidate := range executionCandidates {
+				if _, exiting := pendingExitSet[candidate.Symbol]; exiting {
+					continue
+				}
 				bar, ok := barBySymbolDate[candidate.Symbol][date]
 				if !ok {
 					continue
 				}
 				prevBar := bar
-				if prior, ok := barBySymbolDate[candidate.Symbol][previousTradingDate(dates, dayIdx)]; ok {
-					prevBar = prior
+				if prevDate != "" {
+					if prior, ok := barBySymbolDate[candidate.Symbol][prevDate]; ok {
+						prevBar = prior
+					}
 				}
 				currentShares := holdings[candidate.Symbol]
-				currentValue := float64(currentShares) * bar.Close
+				currentValue := float64(currentShares) * bar.Open
 				targetSlotValue := slotValue
-				history := barsUpToDate(seriesBarsForSymbol(series, candidate.Symbol), date)
+				history := barsUpToDate(barsBySymbol[candidate.Symbol], executedSignalDate)
 				nameVol := recentVolatility(history, min(10, len(history)-1))
 				if nameVol > 0 && portfolio.VolatilityTarget > 0 {
 					targetSlotValue *= clampFloat(portfolio.VolatilityTarget/nameVol, 0.45, 1.15)
 				}
-				targetShares := int(targetSlotValue / (bar.Close * (1 + feeRateBuy + slippageRate)))
+				targetShares := int(targetSlotValue / (bar.Open * (1 + feeRateBuy + slippageRate)))
 				if targetShares < 0 {
 					targetShares = 0
 				}
-				targetValueForName := float64(targetShares) * bar.Close
+				targetValueForName := float64(targetShares) * bar.Open
 				drift := 1.0
 				if targetValueForName > 0 {
 					drift = math.Abs(currentValue-targetValueForName) / targetValueForName
@@ -1526,7 +1497,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 					if sellShares <= 0 {
 						continue
 					}
-					execPrice := bar.Close * (1 - slippageRate)
+					execPrice := bar.Open * (1 - slippageRate)
 					fee := float64(sellShares) * execPrice * feeRateSell
 					cash += float64(sellShares)*execPrice - fee
 					holdings[candidate.Symbol] = currentShares - sellShares
@@ -1539,7 +1510,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 					continue
 				}
 
-				execPrice := bar.Close * (1 + slippageRate)
+				execPrice := bar.Open * (1 + slippageRate)
 				if isBuyRestricted(candidate.Symbol, candidate.Name, bar) || gapOpenMove(prevBar.Close, bar) >= portfolio.GapOpenThreshold {
 					continue
 				}
@@ -1574,6 +1545,46 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 			}
 		}
 
+		nextExitSet := map[string]string{}
+		for symbol, shares := range holdings {
+			if shares <= 0 {
+				continue
+			}
+			bar, ok := barBySymbolDate[symbol][date]
+			if !ok {
+				continue
+			}
+			if bar.Close > holdingPeaks[symbol] {
+				holdingPeaks[symbol] = bar.Close
+			}
+			if entryPrice := entryPrices[symbol]; entryPrice > 0 && bar.Close <= entryPrice*(1-risk.StopLossPct) {
+				nextExitSet[symbol] = "stop_loss"
+				continue
+			}
+			if peak := holdingPeaks[symbol]; peak > 0 && bar.Close <= peak*(1-portfolio.MaxHoldingDrawdown) {
+				nextExitSet[symbol] = "max_drawdown"
+				continue
+			}
+			if candidate, keep := nextTargetSet[symbol]; keep {
+				if candidate.Action == "SELL" {
+					nextExitSet[symbol] = "trend_break"
+				}
+				continue
+			}
+			nextExitSet[symbol] = "drop_out"
+		}
+
+		pendingExitSet = nextExitSet
+		if len(nextExitSet) > 0 {
+			pendingExitSignalDate = date
+		} else {
+			pendingExitSignalDate = ""
+		}
+
+		if len(pendingExitSet) == 0 {
+			snapshotSignalDate = executedSignalDate
+		}
+
 		holdingsList := make([]portfolioHolding, 0)
 		equity := cash
 		for _, item := range series {
@@ -1595,7 +1606,7 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		}
 		sort.Slice(holdingsList, func(i, j int) bool { return holdingsList[i].Symbol < holdingsList[j].Symbol })
 		executionDate := date
-		signalDate := pendingSignalDate
+		signalDate := snapshotSignalDate
 		if signalDate == "" {
 			signalDate = date
 		}
@@ -1609,6 +1620,8 @@ func runPortfolioBacktest(strategy strategyConfig, risk riskConfig, portfolio po
 		})
 
 		pendingTargetSet = nextTargetSet
+		pendingTargetExposure = targetExposure
+		pendingTargetRebalance = shouldRebalance
 		pendingReserveCandidates = append([]scanCandidate(nil), reserveCandidates...)
 		pendingSignalDate = date
 

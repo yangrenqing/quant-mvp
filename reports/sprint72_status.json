@@ -58,7 +58,8 @@
     "residual execution points anchored to six exact cmd/scheduler/main.go ranges for the next patch",
     "minimal pending-exit state-machine model documented to reduce next-bar portfolio conversion ambiguity",
     "post-patch semantic validation checklist documented for the residual next-bar conversion",
-    "next-bar handoff header aligned to the active seam-audit branch and current resume status files"
+    "next-bar handoff header aligned to the active seam-audit branch and current resume status files",
+    "residual portfolio next-bar conversion implemented locally with pending exits/carried rebalance execution and passing go test ./..."
   ],
   "blocked": []
 }

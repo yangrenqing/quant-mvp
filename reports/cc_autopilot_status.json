@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "Next-bar handoff header is now aligned to the active seam-audit branch and current status files, removing an outdated resume baseline before the code conversion step.",
-  "nextAction": "Implement the pending-exit + pending-target t+1 execution flow for the six residual execution points, then validate against the documented semantic checklist.",
-  "updatedAt": "2026-03-24T06:31:00+08:00"
+  "lastSummary": "Residual portfolio next-bar conversion is now implemented locally in cmd/scheduler/main.go: pending exits and carried rebalance targets execute on later trading days, and /usr/local/go/bin/go test ./... passes.",
+  "nextAction": "Commit and push the residual next-bar conversion checkpoint, then run the documented semantic checklist with a fresh portfolio backtest/manual transition review.",
+  "updatedAt": "2026-03-24T09:19:00+08:00"
 }
