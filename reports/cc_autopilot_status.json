@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "The next-bar line remains validated at code checkpoint 10ac6c6, while the branch also contains later non-validated commits (including the separate quality-pullback trial slice at 335ca1e and follow-up docs syncs); these should not be conflated as the same checkpoint.",
+  "lastSummary": "The next-bar line remains validated at code checkpoint 10ac6c6, and the handoff header now surfaces that split explicitly; later branch commits remain outside the validated slice unless separately revalidated for next-bar semantics.",
   "nextAction": "Keep 10ac6c6 as the validated next-bar resume checkpoint, treat later branch commits as outside that validated slice unless separately revalidated for next-bar semantics, and keep resume docs aligned without binding them to every docs-only head move.",
-  "updatedAt": "2026-03-24T18:40:00+08:00"
+  "updatedAt": "2026-03-24T19:55:00+08:00"
 }
