@@ -1,6 +1,6 @@
 # Quant MVP NOW
 
-Updated: 2026-03-24 20:18 Asia/Shanghai
+Updated: 2026-03-24 23:55 Asia/Shanghai
 
 ## 当前状态
 - repo: `/Users/yangrenqing/Downloads/quant-mvp`
@@ -10,7 +10,7 @@ Updated: 2026-03-24 20:18 Asia/Shanghai
 - sprint: `quant-mvp-72h`
 - phase: `phase5-next-bar-portfolio-residual-conversion-first-pass-validated`
 - validated next-bar checkpoint: `10ac6c6`
-- current branch head snapshot: `3cfc2a5` (docs/status sync after handoff refresh; not itself a newly validated next-bar checkpoint)
+- current branch head snapshot: `0fb4cb5` (latest docs/status sync for validated-checkpoint wording; not itself a newly validated next-bar checkpoint)
 
 ## 当前主线 feature
 ### `feature/backtest-trust-next-bar-seam-audit` · validated next-bar checkpoint vs later branch work hygiene
