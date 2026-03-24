@@ -268,7 +268,7 @@ Validation evidence already captured:
 
 Immediate next step:
 - use `10ac6c6` as the validated resume checkpoint for this next-bar line
-- do not confuse later branch-head commits (for example `335ca1e`, a separate quality-pullback trial slice) with this validated checkpoint unless they are explicitly revalidated for next-bar semantics
+- do not confuse later branch work (including `335ca1e`, a separate quality-pullback trial slice, plus any follow-up docs-sync commits) with this validated checkpoint unless those later commits are explicitly revalidated for next-bar semantics
 - only reopen this area if new evidence shows the restricted/gap-blocked pending-exit caveat is materially harmful
 
 Remaining caveat captured in code-path behavior:
