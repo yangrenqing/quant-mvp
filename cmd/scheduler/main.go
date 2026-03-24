@@ -102,60 +102,62 @@ type positionState struct {
 }
 
 type scanCandidate struct {
-	Symbol              string
-	Name                string
-	Industry            string
-	Action              string
-	Bucket              string
-	Score               float64
-	QualityScore        float64
-	RiskScore           float64
-	HeatPenalty         float64
-	ReversalScore       float64
-	ValueScore          float64
-	LowVolScore         float64
-	CrowdingScore       float64
-	FundamentalScore    float64
-	ValuationScore      float64
-	EventScore          float64
-	TrendScore          float64
-	LiquidityScore      float64
-	StructureScore      float64
-	MomentumScore       float64
-	PersistenceScore    float64
-	BreakoutScore       float64
-	VolumeTrendScore    float64
-	ShortReturnScore    float64
-	MediumReturnScore   float64
-	IndustryStrength    float64
-	RotationScore       float64
-	StrategyAlignment   float64
-	StrategyVotes       string
-	ModelScore          float64
-	BenchmarkModelScore float64
-	RiskPenalty         float64
-	AvgVolume           float64
-	Trigger             string
-	TriggerPrice        float64
-	AvoidTags           []string
-	ShortMA             float64
-	LongMA              float64
-	ClosePrice          float64
-	MarketDate          string
-	Reason              string
-	Plan                string
-	HasBacktest         bool
-	BacktestMode        string
-	BacktestFrom        string
-	BacktestTo          string
-	BacktestReturn      float64
-	BacktestAnnualized  float64
-	BacktestBenchmark   float64
-	BacktestExcess      float64
-	BacktestDrawdown    float64
-	BacktestWinRate     float64
-	BacktestTrades      int
-	InPortfolio         bool
+	Symbol               string
+	Name                 string
+	Industry             string
+	Action               string
+	Bucket               string
+	SetupTag             string
+	Score                float64
+	QualityScore         float64
+	RiskScore            float64
+	HeatPenalty          float64
+	ReversalScore        float64
+	QualityPullbackScore float64
+	ValueScore           float64
+	LowVolScore          float64
+	CrowdingScore        float64
+	FundamentalScore     float64
+	ValuationScore       float64
+	EventScore           float64
+	TrendScore           float64
+	LiquidityScore       float64
+	StructureScore       float64
+	MomentumScore        float64
+	PersistenceScore     float64
+	BreakoutScore        float64
+	VolumeTrendScore     float64
+	ShortReturnScore     float64
+	MediumReturnScore    float64
+	IndustryStrength     float64
+	RotationScore        float64
+	StrategyAlignment    float64
+	StrategyVotes        string
+	ModelScore           float64
+	BenchmarkModelScore  float64
+	RiskPenalty          float64
+	AvgVolume            float64
+	Trigger              string
+	TriggerPrice         float64
+	AvoidTags            []string
+	ShortMA              float64
+	LongMA               float64
+	ClosePrice           float64
+	MarketDate           string
+	Reason               string
+	Plan                 string
+	HasBacktest          bool
+	BacktestMode         string
+	BacktestFrom         string
+	BacktestTo           string
+	BacktestReturn       float64
+	BacktestAnnualized   float64
+	BacktestBenchmark    float64
+	BacktestExcess       float64
+	BacktestDrawdown     float64
+	BacktestWinRate      float64
+	BacktestTrades       int
+	InPortfolio          bool
 }
 
 type backtestTrade struct {
@@ -268,6 +270,7 @@ type paperTrialAccountSummary struct {
 	AccountID        int
 	Group            string
 	ExperimentID     string
+	Style            string
 	Mode             string
 	Strategy         string
 	MarketDate       string
@@ -338,6 +341,7 @@ type paperTrialBatchResult struct {
 
 type paperExperimentSpec struct {
 	ID               string
+	Style            string
 	TopN             int
 	Strategy         strategyConfig
 	Portfolio        portfolioConfig
@@ -354,6 +358,7 @@ type paperTrialWinnerArtifact struct {
 	SourceMode       string  `json:"source_mode"`
 	SourceGroup      string  `json:"source_group"`
 	ExperimentID     string  `json:"experiment_id"`
+	Style            string  `json:"style"`
 	StrategyVersion  string  `json:"strategy_version"`
 	CandidateVersion string  `json:"candidate_version"`
 	ParameterSummary string  `json:"parameter_summary"`
@@ -2020,6 +2025,7 @@ func generatePaperExperimentSpecs(base config, trialCount int, defaultTopN int, 
 	if defaultTopN > 0 {
 		topNs[0] = defaultTopN
 	}
+	styles := []string{"trend_follow", "balanced", "quality_pullback"}
 	qualityMultipliers := []float64{0.80, 0.95, 1.00, 1.10, 1.25}
 	riskMultipliers := []float64{0.75, 0.90, 1.05, 1.20}
 	cashShares := []float64{0.20, 0.30, 0.35, 0.45}
@@ -2039,6 +2045,7 @@ func generatePaperExperimentSpecs(base config, trialCount int, defaultTopN int, 
 				index++
 				spec := paperExperimentSpec{
 					ID:          fmt.Sprintf("exp%03d", index),
+					Style:       styles[(index-1)%len(styles)],
 					TopN:        top,
 					Strategy:    base.Strategy,
 					Portfolio:   base.Portfolio,
@@ -2053,8 +2060,37 @@ func generatePaperExperimentSpecs(base config, trialCount int, defaultTopN int, 
 				spec.Portfolio.MaxPositionWeight = positionWeights[(index-1)%len(positionWeights)]
 				spec.Portfolio.MinBacktestExcess = minBacktestExcesses[(index-1)%len(minBacktestExcesses)]
 				spec.Portfolio.HeatPenaltyWeight = clampFloat(base.Portfolio.HeatPenaltyWeight*heatMultipliers[(index-1)%len(heatMultipliers)], 0.20, 3.00)
+				switch spec.Style {
+				case "trend_follow":
+					spec.Portfolio.BreakoutEnabled = true
+					spec.Portfolio.PullbackEnabled = false
+					spec.Portfolio.TrendStrategyWeight = clampFloat(maxFloat(base.Portfolio.TrendStrategyWeight, 1.0), 0.50, 2.00)
+					spec.Portfolio.BreakoutStrategyWeight = clampFloat(maxFloat(base.Portfolio.BreakoutStrategyWeight, 0.9), 0.40, 2.00)
+					spec.Portfolio.PullbackStrategyWeight = clampFloat(minFloat(base.Portfolio.PullbackStrategyWeight, 0.4), 0.10, 1.00)
+					spec.Portfolio.ReversalWeight = clampFloat(base.Portfolio.ReversalWeight*0.75, 0.20, 2.00)
+				case "quality_pullback":
+					spec.Portfolio.BreakoutEnabled = false
+					spec.Portfolio.PullbackEnabled = true
+					spec.Portfolio.TrendStrategyWeight = clampFloat(base.Portfolio.TrendStrategyWeight*0.75, 0.30, 1.50)
+					spec.Portfolio.BreakoutStrategyWeight = clampFloat(base.Portfolio.BreakoutStrategyWeight*0.60, 0.10, 1.00)
+					spec.Portfolio.PullbackStrategyWeight = clampFloat(maxFloat(base.Portfolio.PullbackStrategyWeight, 1.35), 0.80, 2.20)
+					spec.Portfolio.ReversalWeight = clampFloat(base.Portfolio.ReversalWeight*1.45, 0.60, 3.00)
+					spec.Portfolio.QualityWeight = clampFloat(spec.Portfolio.QualityWeight*1.10, 0.30, 3.00)
+					spec.Portfolio.RiskWeight = clampFloat(spec.Portfolio.RiskWeight*1.05, 0.30, 3.00)
+					spec.Portfolio.MaxCashShare = clampFloat(spec.Portfolio.MaxCashShare, 0.20, 0.35)
+					spec.Portfolio.MinBacktestExcess = minFloat(spec.Portfolio.MinBacktestExcess, -0.05)
+					spec.Portfolio.HeatPenaltyWeight = clampFloat(spec.Portfolio.HeatPenaltyWeight*0.85, 0.20, 3.00)
+				default:
+					spec.Portfolio.BreakoutEnabled = false
+					spec.Portfolio.PullbackEnabled = true
+					spec.Portfolio.TrendStrategyWeight = clampFloat(base.Portfolio.TrendStrategyWeight, 0.40, 1.80)
+					spec.Portfolio.BreakoutStrategyWeight = clampFloat(base.Portfolio.BreakoutStrategyWeight*0.85, 0.20, 1.50)
+					spec.Portfolio.PullbackStrategyWeight = clampFloat(maxFloat(base.Portfolio.PullbackStrategyWeight, 0.90), 0.40, 1.60)
+					spec.Portfolio.ReversalWeight = clampFloat(base.Portfolio.ReversalWeight*1.10, 0.40, 2.50)
+				}
 				spec.ParameterSummary = fmt.Sprintf(
-					"top=%d short/long=%d/%d quality_w=%.2f risk_w=%.2f cash_share=%.2f max_pos=%.2f min_excess=%.2f heat_w=%.2f fee=%.1f slip=%.1f",
+					"style=%s top=%d short/long=%d/%d quality_w=%.2f risk_w=%.2f cash_share=%.2f max_pos=%.2f min_excess=%.2f heat_w=%.2f trend_w=%.2f breakout=%t/%.2f pullback=%t/%.2f reversal_w=%.2f fee=%.1f slip=%.1f",
+					spec.Style,
 					spec.TopN,
 					spec.Strategy.ShortWindow,
 					spec.Strategy.LongWindow,
@@ -2064,6 +2100,12 @@ func generatePaperExperimentSpecs(base config, trialCount int, defaultTopN int, 
 					spec.Portfolio.MaxPositionWeight,
 					spec.Portfolio.MinBacktestExcess,
 					spec.Portfolio.HeatPenaltyWeight,
+					spec.Portfolio.TrendStrategyWeight,
+					spec.Portfolio.BreakoutEnabled,
+					spec.Portfolio.BreakoutStrategyWeight,
+					spec.Portfolio.PullbackEnabled,
+					spec.Portfolio.PullbackStrategyWeight,
+					spec.Portfolio.ReversalWeight,
 					spec.FeeBps,
 					spec.SlippageBps,
 				)
@@ -2089,6 +2131,7 @@ func summarizePaperTrialAccount(result paperAccountResult, initialCash float64, 
 		AccountID:        result.AccountID,
 		Group:            paperTrialGroup(result.Mode),
 		ExperimentID:     spec.ID,
+		Style:            spec.Style,
 		Mode:             result.Mode,
 		Strategy:         result.Version,
 		MarketDate:       result.MarketDate,
@@ -3166,6 +3209,7 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig,
 	score += candidate.QualityScore * portfolio.QualityWeight * 0.85
 	score += candidate.RiskScore * portfolio.RiskWeight * 0.90
 	score += candidate.ReversalScore * portfolio.ReversalWeight * 0.65
+	score += candidate.QualityPullbackScore * 1.10
 	score += candidate.ValueScore * 1.30
 	score += candidate.LowVolScore * 1.25
 	score -= candidate.CrowdingScore * 1.15
@@ -3193,6 +3237,7 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig,
 		score += candidate.BreakoutScore * 0.25
 		score += candidate.ModelScore * 0.25
 		score += candidate.RotationScore * 0.15
+		score += candidate.QualityPullbackScore * 0.20
 		score -= candidate.ValuationScore * 0.10
 	case "risk_off":
 		score += candidate.FundamentalScore * 0.45
@@ -3200,6 +3245,7 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig,
 		score += candidate.LowVolScore * 0.45
 		score += candidate.LiquidityScore * 1.20
 		score += candidate.ValueScore * 0.35
+		score += candidate.QualityPullbackScore * 1.35
 		score += (candidate.BenchmarkModelScore - 0.50) * 0.40
 		score -= candidate.MomentumScore * 0.30
 		score -= candidate.BreakoutScore * 0.20
@@ -3218,6 +3264,59 @@ func portfolioSelectionScore(candidate scanCandidate, portfolio portfolioConfig,
 		score -= portfolio.WatchPenalty
 	}
 	return score
+}
+
+func qualityPullbackOpportunityScore(bars []marketBar, shortMA float64, longMA float64, trendScore float64, structureScore float64, qualityScore float64, riskScore float64, valueScore float64, lowVolScore float64, crowdingScore float64, heatPenalty float64, fundamentalScore float64, valuationScore float64, benchmarkModelScore float64) float64 {
+	if len(bars) == 0 || shortMA <= 0 || longMA <= 0 {
+		return 0
+	}
+
+	latest := bars[len(bars)-1]
+	if latest.Close <= 0 {
+		return 0
+	}
+
+	closes := make([]float64, 0, len(bars))
+	for _, bar := range bars {
+		closes = append(closes, bar.Close)
+	}
+
+	oneDayReturn := trailingReturn(closes, 1)
+	threeDayReturn := trailingReturn(closes, min(3, len(closes)-1))
+	mediumReturn := trailingReturn(closes, min(20, len(closes)-1))
+	pricePosition := rollingPricePosition(closes, min(60, len(closes)))
+	reversionGap := shortMA/latest.Close - 1
+	longSupportGap := latest.Close/longMA - 1
+
+	score := 0.0
+	if latest.Close >= longMA*0.97 && latest.Close <= shortMA*1.01 {
+		score += clampFloat(reversionGap, 0, 0.10) * 0.95
+		score += clampFloat(longSupportGap+0.03, 0, 0.08) * 0.70
+	}
+	score += clampFloat(-oneDayReturn, 0, 0.08) * 0.45
+	score += clampFloat(-threeDayReturn, 0, 0.12) * 0.70
+	score += clampFloat(0.70-pricePosition, 0, 0.30) * 0.40
+	score += clampFloat(qualityScore, 0, 0.45) * 0.40
+	score += clampFloat(riskScore, 0, 0.22) * 0.45
+	score += clampFloat(valueScore, 0, 0.24) * 0.55
+	score += clampFloat(lowVolScore, 0, 0.16) * 0.30
+	score += clampFloat(fundamentalScore, 0, 0.12) * 0.80
+	score += clampFloat(valuationScore, -0.02, 0.10) * 0.35
+	score += clampFloat(benchmarkModelScore-0.50, -0.10, 0.20) * 0.25
+	score -= crowdingScore * 0.80
+	score -= heatPenalty * 0.95
+
+	if latest.Close < longMA*0.95 || trendScore < -0.03 || structureScore < -0.08 {
+		score -= 0.12
+	}
+	if mediumReturn < -0.12 {
+		score -= 0.08
+	}
+	if oneDayReturn > 0.03 {
+		score -= 0.05
+	}
+
+	return clampFloat(score, 0, 0.22)
 }
 
 func candidateOverlayScores(bars []marketBar, shortMA float64, longMA float64, avgVolume float64, shortReturn float64, mediumReturn float64, trendScore float64, liquidityScore float64, persistenceScore float64, breakoutScore float64, volumeTrendScore float64, riskPenalty float64) (float64, float64, float64, float64, float64, float64, float64) {
@@ -4384,13 +4483,14 @@ func writePaperTrialWinnerReports(result paperTrialBatchResult) error {
 		textPath := filepath.Join(reportsDir, baseName+".txt")
 		jsonPath := reportJSONPath(baseName)
 		text := fmt.Sprintf(
-			"Paper Trial Winner\n\nReport tag: %s\nTrial prefix: %s\nGenerated at: %s\nCandidate version: %s\nSource mode: %s\nExperiment: %s\nStrategy version: %s\nRank: %d\nPrevious rank: %d\nRank delta: %+d\nEquity: %.2f\nEquity delta: %.2f\nReturn: %.2f%%\nReturn delta: %.2f%%\nParameters: %s\n",
+			"Paper Trial Winner\n\nReport tag: %s\nTrial prefix: %s\nGenerated at: %s\nCandidate version: %s\nSource mode: %s\nExperiment: %s\nStyle: %s\nStrategy version: %s\nRank: %d\nPrevious rank: %d\nRank delta: %+d\nEquity: %.2f\nEquity delta: %.2f\nReturn: %.2f%%\nReturn delta: %.2f%%\nParameters: %s\n",
 			winner.ReportTag,
 			winner.TrialPrefix,
 			winner.GeneratedAt,
 			winner.CandidateVersion,
 			winner.SourceMode,
 			winner.ExperimentID,
+			winner.Style,
 			winner.StrategyVersion,
 			winner.Rank,
 			winner.PreviousRank,
@@ -4435,6 +4535,7 @@ func buildPaperTrialWinnerArtifact(result paperTrialBatchResult) (paperTrialWinn
 		SourceMode:       winnerAccount.Mode,
 		SourceGroup:      winnerAccount.Group,
 		ExperimentID:     winnerAccount.ExperimentID,
+		Style:            winnerAccount.Style,
 		StrategyVersion:  winnerAccount.Strategy,
 		CandidateVersion: candidateVersion,
 		ParameterSummary: winnerAccount.ParameterSummary,
@@ -4607,12 +4708,13 @@ func renderPaperTrialReport(result paperTrialBatchResult) (string, string, strin
 	}
 	textBuilder.WriteString("\nRanked Accounts\n")
 	for _, account := range result.Accounts {
-		fmt.Fprintf(&textBuilder, "- #%d [%s] %s strategy=%s exp=%s equity=%.2f cash=%.2f return=%.2f%% prev_rank=%d rank_delta=%+d eq_delta=%.2f ret_delta=%.2f%% top=%d fee=%.1f slip=%.1f params=%s note=%s\n",
+		fmt.Fprintf(&textBuilder, "- #%d [%s] %s strategy=%s exp=%s style=%s equity=%.2f cash=%.2f return=%.2f%% prev_rank=%d rank_delta=%+d eq_delta=%.2f ret_delta=%.2f%% top=%d fee=%.1f slip=%.1f params=%s note=%s\n",
 			account.Rank,
 			account.Group,
 			account.Mode,
 			account.Strategy,
 			account.ExperimentID,
+			account.Style,
 			account.Equity,
 			account.Cash,
 			account.Return*100,
@@ -4647,12 +4749,13 @@ func renderPaperTrialReport(result paperTrialBatchResult) (string, string, strin
 
 	var accountRows strings.Builder
 	for _, account := range result.Accounts {
-		fmt.Fprintf(&accountRows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.2f</td><td>%.2f%%</td><td>%d</td><td>%+d</td><td>%.2f</td><td>%.2f%%</td><td>%s</td><td>%s</td></tr>`,
+		fmt.Fprintf(&accountRows, `<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.2f</td><td>%.2f%%</td><td>%d</td><td>%+d</td><td>%.2f</td><td>%.2f%%</td><td>%s</td><td>%s</td></tr>`,
 			account.Rank,
 			html.EscapeString(account.Group),
 			html.EscapeString(account.Mode),
 			html.EscapeString(account.Strategy),
 			html.EscapeString(account.ExperimentID),
+			html.EscapeString(account.Style),
 			account.Equity,
 			account.Return*100,
 			account.PreviousRank,
@@ -4712,7 +4815,7 @@ func renderPaperTrialReport(result paperTrialBatchResult) (string, string, strin
       <h2>Group Summary</h2>
       <table><thead><tr><th>Group</th><th>Accounts</th><th>Avg Equity</th><th>Avg Return</th><th>Best Mode</th><th>Best Equity</th><th>Worst Mode</th><th>Worst Equity</th><th>Improved</th><th>Regressed</th><th>New</th></tr></thead><tbody>%s</tbody></table>
       <h2>Ranked Accounts</h2>
-      <table><thead><tr><th>Rank</th><th>Group</th><th>Mode</th><th>Strategy</th><th>Experiment</th><th>Equity</th><th>Return</th><th>Prev Rank</th><th>Rank Delta</th><th>Equity Delta</th><th>Return Delta</th><th>Parameters</th><th>Market Date</th></tr></thead><tbody>%s</tbody></table>
+      <table><thead><tr><th>Rank</th><th>Group</th><th>Mode</th><th>Strategy</th><th>Experiment</th><th>Style</th><th>Equity</th><th>Return</th><th>Prev Rank</th><th>Rank Delta</th><th>Equity Delta</th><th>Return Delta</th><th>Parameters</th><th>Market Date</th></tr></thead><tbody>%s</tbody></table>
     </div>
   </div>
 </body>
@@ -4736,14 +4839,15 @@ func renderPaperTrialReport(result paperTrialBatchResult) (string, string, strin
 	)
 
 	var csvBuilder strings.Builder
-	csvBuilder.WriteString("rank,group,mode,strategy,experiment_id,market_date,equity,cash,return,previous_rank,rank_delta,equity_delta,return_delta,top_n,short_window,long_window,fee_bps,slippage_bps,parameters\n")
+	csvBuilder.WriteString("rank,group,mode,strategy,experiment_id,style,market_date,equity,cash,return,previous_rank,rank_delta,equity_delta,return_delta,top_n,short_window,long_window,fee_bps,slippage_bps,parameters\n")
 	for _, account := range result.Accounts {
-		fmt.Fprintf(&csvBuilder, "%d,%s,%s,%s,%s,%s,%.2f,%.2f,%.6f,%d,%d,%.2f,%.6f,%d,%d,%d,%.2f,%.2f,%s\n",
+		fmt.Fprintf(&csvBuilder, "%d,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.6f,%d,%d,%.2f,%.6f,%d,%d,%d,%.2f,%.2f,%s\n",
 			account.Rank,
 			sanitizeCSV(account.Group),
 			sanitizeCSV(account.Mode),
 			sanitizeCSV(account.Strategy),
 			sanitizeCSV(account.ExperimentID),
+			sanitizeCSV(account.Style),
 			sanitizeCSV(account.MarketDate),
 			account.Equity,
 			account.Cash,
@@ -6237,6 +6341,13 @@ func max(a int, b int) int {
 	return b
 }
 
+func maxFloat(a float64, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func clampFloat(value float64, lower float64, upper float64) float64 {
 	if value < lower {
 		return lower
@@ -6248,6 +6359,13 @@ func clampFloat(value float64, lower float64, upper float64) float64 {
 }
 
 func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func minFloat(a float64, b float64) float64 {
 	if a < b {
 		return a
 	}
@@ -7536,10 +7654,27 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 	mediumReturnScore := trailingReturn(closes, min(20, len(closes)-1))
 	valueScore, lowVolScore, crowdingScore, qualityScore, riskScore, heatPenalty, reversalScore := candidateOverlayScores(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, trendScore, liquidityScore, persistenceScore, breakoutScore, volumeTrendScore, riskPenalty)
 	fundamentalScore, valuationScore, eventScore := fundamentalOverlayScores(symbol)
+	qualityPullbackScore := qualityPullbackOpportunityScore(
+		bars,
+		shortMA,
+		longMA,
+		trendScore,
+		structureScore,
+		qualityScore,
+		riskScore,
+		valueScore,
+		lowVolScore,
+		crowdingScore,
+		heatPenalty,
+		fundamentalScore,
+		valuationScore,
+		0,
+	)
 	action, strategyAlignment, strategyVotes, reason, trigger := evaluateStrategyEnsemble(bars, shortMA, longMA, avgVolume, shortReturnScore, mediumReturnScore, dataSource, sourceErr, portfolio)
 	score = score*0.35 +
 		qualityScore*portfolio.QualityWeight*0.95 +
 		riskScore*portfolio.RiskWeight*0.90 +
+		qualityPullbackScore*1.20 +
 		valueScore*1.20 +
 		lowVolScore*1.05 -
 		crowdingScore*0.90 +
@@ -7556,55 +7691,76 @@ func rankCandidate(symbol string, name string, industry string, bars []marketBar
 		volumeTrendScore*0.15 +
 		strategyAlignment*0.45
 
-	bucket, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, reason, trigger)
+	bucket, setupTag, reason, trigger, triggerPrice, avoidTags := classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, score, qualityPullbackScore, riskPenalty, fundamentalScore, reason, trigger)
 	candidate := scanCandidate{
-		Symbol:            symbol,
-		Name:              name,
-		Industry:          industry,
-		Action:            action,
-		Bucket:            bucket,
-		Score:             score,
-		QualityScore:      qualityScore,
-		RiskScore:         riskScore,
-		HeatPenalty:       heatPenalty,
-		ReversalScore:     reversalScore,
-		ValueScore:        valueScore,
-		LowVolScore:       lowVolScore,
-		CrowdingScore:     crowdingScore,
-		FundamentalScore:  fundamentalScore,
-		ValuationScore:    valuationScore,
-		EventScore:        eventScore,
-		TrendScore:        trendScore,
-		LiquidityScore:    liquidityScore,
-		StructureScore:    structureScore,
-		MomentumScore:     momentumScore,
-		PersistenceScore:  persistenceScore,
-		BreakoutScore:     breakoutScore,
-		VolumeTrendScore:  volumeTrendScore,
-		ShortReturnScore:  shortReturnScore,
-		MediumReturnScore: mediumReturnScore,
-		StrategyAlignment: strategyAlignment,
-		StrategyVotes:     strategyVotes,
-		RiskPenalty:       riskPenalty,
-		AvgVolume:         avgVolume,
-		Trigger:           trigger,
-		TriggerPrice:      triggerPrice,
-		AvoidTags:         avoidTags,
-		ShortMA:           shortMA,
-		LongMA:            longMA,
-		ClosePrice:        latest.Close,
-		MarketDate:        latest.Date,
-		Reason:            reason,
-		Plan:              planForBucket(bucket, action, shortMA, longMA, avgVolume),
+		Symbol:               symbol,
+		Name:                 name,
+		Industry:             industry,
+		Action:               action,
+		Bucket:               bucket,
+		SetupTag:             setupTag,
+		Score:                score,
+		QualityScore:         qualityScore,
+		RiskScore:            riskScore,
+		HeatPenalty:          heatPenalty,
+		ReversalScore:        reversalScore,
+		QualityPullbackScore: qualityPullbackScore,
+		ValueScore:           valueScore,
+		LowVolScore:          lowVolScore,
+		CrowdingScore:        crowdingScore,
+		FundamentalScore:     fundamentalScore,
+		ValuationScore:       valuationScore,
+		EventScore:           eventScore,
+		TrendScore:           trendScore,
+		LiquidityScore:       liquidityScore,
+		StructureScore:       structureScore,
+		MomentumScore:        momentumScore,
+		PersistenceScore:     persistenceScore,
+		BreakoutScore:        breakoutScore,
+		VolumeTrendScore:     volumeTrendScore,
+		ShortReturnScore:     shortReturnScore,
+		MediumReturnScore:    mediumReturnScore,
+		StrategyAlignment:    strategyAlignment,
+		StrategyVotes:        strategyVotes,
+		RiskPenalty:          riskPenalty,
+		AvgVolume:            avgVolume,
+		Trigger:              trigger,
+		TriggerPrice:         triggerPrice,
+		AvoidTags:            avoidTags,
+		ShortMA:              shortMA,
+		LongMA:               longMA,
+		ClosePrice:           latest.Close,
+		MarketDate:           latest.Date,
+		Reason:               reason,
+		Plan:                 planForBucket(bucket, setupTag, action, shortMA, longMA, avgVolume),
 	}
 	candidate.ModelScore = predictLinearModel(candidate)
 	candidate.BenchmarkModelScore = predictBenchmarkModel(candidate)
+	candidate.QualityPullbackScore = qualityPullbackOpportunityScore(
+		bars,
+		shortMA,
+		longMA,
+		trendScore,
+		structureScore,
+		qualityScore,
+		riskScore,
+		valueScore,
+		lowVolScore,
+		crowdingScore,
+		heatPenalty,
+		fundamentalScore,
+		valuationScore,
+		candidate.BenchmarkModelScore,
+	)
 	if candidate.ModelScore != 0 {
 		candidate.Score = candidate.Score*0.80 + candidate.ModelScore*0.20
 	}
+	candidate.Score += candidate.QualityPullbackScore * 0.10
 	if candidate.BenchmarkModelScore != 0 {
 		candidate.Score += (candidate.BenchmarkModelScore - 0.50) * 0.15
 	}
+	candidate.Bucket, candidate.SetupTag, candidate.Reason, candidate.Trigger, candidate.TriggerPrice, candidate.AvoidTags = classifyCandidate(name, latest.Close, shortMA, longMA, avgVolume, action, candidate.Score, candidate.QualityPullbackScore, riskPenalty, fundamentalScore, reason, trigger)
+	candidate.Plan = planForBucket(candidate.Bucket, candidate.SetupTag, action, shortMA, longMA, avgVolume)
 	return candidate, nil
 }
 
@@ -7811,28 +7967,50 @@ func bucketPriority(bucket string) int {
 	}
 }
 
-func classifyCandidate(name string, closePrice float64, shortMA float64, longMA float64, avgVolume float64, action string, score float64, reason string, trigger string) (string, string, string, float64, []string) {
+func classifyCandidate(name string, closePrice float64, shortMA float64, longMA float64, avgVolume float64, action string, score float64, qualityPullbackScore float64, riskPenalty float64, fundamentalScore float64, reason string, trigger string) (string, string, string, string, float64, []string) {
 	if isSTName(name) {
-		return "回避", "ST or *ST stock excluded from attention list", "Only reassess after ST risk is removed", longMA, []string{"ST风险"}
+		return "回避", "risk_filter", "ST or *ST stock excluded from attention list", "Only reassess after ST risk is removed", longMA, []string{"ST风险"}
 	}
 	if avgVolume < 1_000_000 {
-		return "回避", fmt.Sprintf("average volume %.0f is too low for this scan", avgVolume), "Only reassess after liquidity improves", shortMA, []string{"低流动性"}
+		return "回避", "risk_filter", fmt.Sprintf("average volume %.0f is too low for this scan", avgVolume), "Only reassess after liquidity improves", shortMA, []string{"低流动性"}
 	}
 
 	stopLine := longMA * 0.97
 	if closePrice < stopLine {
-		return "回避", fmt.Sprintf("price %.2f is below the stop line %.2f", closePrice, stopLine), fmt.Sprintf("Only reassess if price reclaims %.2f", longMA), longMA, []string{"跌破止损线"}
+		if action != "SELL" && qualityPullbackScore >= 0.12 && riskPenalty <= 0.06 && fundamentalScore >= 0 {
+			return "观望", "quality_pullback",
+				fmt.Sprintf("price %.2f is below the stop line %.2f, but quality pullback conditions still warrant observation", closePrice, stopLine),
+				fmt.Sprintf("Only re-engage after price reclaims %.2f and stabilizes above %.2f", longMA, stopLine),
+				longMA,
+				[]string{"破位观察"}
+		}
+		return "回避", "risk_filter", fmt.Sprintf("price %.2f is below the stop line %.2f", closePrice, stopLine), fmt.Sprintf("Only reassess if price reclaims %.2f", longMA), longMA, []string{"跌破止损线"}
 	}
 
 	if action == "BUY" && score > 0.01 && closePrice > shortMA && shortMA > longMA {
-		return "建议关注", reason, trigger, shortMA, nil
+		return "建议关注", "trend_follow", reason, trigger, shortMA, nil
+	}
+
+	if action != "SELL" && qualityPullbackScore >= 0.11 && closePrice >= longMA*0.985 && shortMA >= longMA*0.99 {
+		return "建议关注", "quality_pullback",
+			firstNonEmpty(reason, "quality pullback setup is forming near long-term support"),
+			fmt.Sprintf("Absorb near %.2f and confirm reclaim of %.2f with steady volume", longMA, shortMA),
+			longMA,
+			nil
 	}
 
 	if action == "HOLD" || (action == "BUY" && score > 0) {
-		return "观望", reason, fmt.Sprintf("Watch for a clean move above %.2f and volume above %.0f", shortMA, avgVolume), shortMA, nil
+		if qualityPullbackScore >= 0.07 && closePrice >= longMA*0.97 {
+			return "观望", "quality_pullback",
+				firstNonEmpty(reason, "quality pullback setup is improving but not confirmed"),
+				fmt.Sprintf("Watch for support near %.2f and reclaim above %.2f with volume above %.0f", longMA, shortMA, avgVolume),
+				longMA,
+				nil
+		}
+		return "观望", "trend_watch", reason, fmt.Sprintf("Watch for a clean move above %.2f and volume above %.0f", shortMA, avgVolume), shortMA, nil
 	}
 
-	return "回避", reason, trigger, longMA, []string{"趋势偏弱"}
+	return "回避", "risk_filter", reason, trigger, longMA, []string{"趋势偏弱"}
 }
 
 func isSTName(name string) bool {
@@ -7840,11 +8018,17 @@ func isSTName(name string) bool {
 	return strings.HasPrefix(upper, "ST") || strings.HasPrefix(upper, "*ST")
 }
 
-func planForBucket(bucket string, action string, shortMA float64, longMA float64, avgVolume float64) string {
+func planForBucket(bucket string, setupTag string, action string, shortMA float64, longMA float64, avgVolume float64) string {
 	switch bucket {
 	case "建议关注":
+		if setupTag == "quality_pullback" {
+			return fmt.Sprintf("可按优质股回撤思路跟踪，先观察 %.2f 一带承接，若重新站回 %.2f 且放量，再考虑小仓分批试错", longMA, shortMA)
+		}
 		return fmt.Sprintf("可纳入明日优先观察名单，若继续站稳 %.2f 上方并维持放量，可考虑分批跟踪", shortMA)
 	case "观望":
+		if setupTag == "quality_pullback" {
+			return fmt.Sprintf("先看 %.2f 附近能否止跌，只有在重新站回 %.2f 且成交量高于 %.0f 后，才考虑低吸试错", longMA, shortMA, avgVolume)
+		}
 		return fmt.Sprintf("暂不追入，等待价格有效站上 %.2f 且成交量高于 %.0f 后再确认", shortMA, avgVolume)
 	case "回避":
 		if action == "SELL" {
@@ -8045,11 +8229,12 @@ func writeBucketText(builder *strings.Builder, title string, candidates []scanCa
 		fmt.Fprintf(builder, "   Action: %s\n", candidate.Action)
 		fmt.Fprintf(builder, "   Market date: %s\n", candidate.MarketDate)
 		fmt.Fprintf(builder, "   Score: %.4f\n", candidate.Score)
-		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | value %.4f | low_vol %.4f | crowding %.4f | fundamental %.4f | valuation %.4f | event %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | benchmark_model %.4f | risk_penalty %.4f\n",
+		fmt.Fprintf(builder, "   Score Breakdown: quality %.4f | risk %.4f | heat_penalty %.4f | reversal %.4f | quality_pullback %.4f | value %.4f | low_vol %.4f | crowding %.4f | fundamental %.4f | valuation %.4f | event %.4f | trend %.4f | liquidity %.4f | structure %.4f | momentum %.4f | persistence %.4f | breakout %.4f | volume_trend %.4f | rotation %.4f | strategy %.4f | model %.4f | benchmark_model %.4f | risk_penalty %.4f\n",
 			candidate.QualityScore,
 			candidate.RiskScore,
 			candidate.HeatPenalty,
 			candidate.ReversalScore,
+			candidate.QualityPullbackScore,
 			candidate.ValueScore,
 			candidate.LowVolScore,
 			candidate.CrowdingScore,

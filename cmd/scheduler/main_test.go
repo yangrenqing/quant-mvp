@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -52,9 +53,13 @@ func TestGeneratePaperExperimentSpecs(t *testing.T) {
 	base := config{
 		Strategy: strategyConfig{ShortWindow: 5, LongWindow: 20},
 		Portfolio: portfolioConfig{
-			QualityWeight:     1.1,
-			RiskWeight:        0.8,
-			HeatPenaltyWeight: 1.1,
+			QualityWeight:          1.1,
+			RiskWeight:             0.8,
+			HeatPenaltyWeight:      1.1,
+			TrendStrategyWeight:    1.0,
+			BreakoutStrategyWeight: 0.9,
+			PullbackStrategyWeight: 0.8,
+			ReversalWeight:         0.7,
 		},
 	}
 
@@ -71,6 +76,18 @@ func TestGeneratePaperExperimentSpecs(t *testing.T) {
 	if specs[0].ParameterSummary == "" {
 		t.Fatal("expected parameter summary")
 	}
+	if specs[0].Style != "trend_follow" || specs[1].Style != "balanced" || specs[2].Style != "quality_pullback" {
+		t.Fatalf("unexpected style rotation: %q %q %q", specs[0].Style, specs[1].Style, specs[2].Style)
+	}
+	if !strings.Contains(specs[2].ParameterSummary, "style=quality_pullback") {
+		t.Fatalf("missing style in summary: %q", specs[2].ParameterSummary)
+	}
+	if specs[0].Portfolio.PullbackEnabled {
+		t.Fatalf("trend_follow spec should disable pullback: %+v", specs[0].Portfolio)
+	}
+	if !specs[2].Portfolio.PullbackEnabled || specs[2].Portfolio.BreakoutEnabled {
+		t.Fatalf("quality_pullback spec flags invalid: %+v", specs[2].Portfolio)
+	}
 }
 
 func TestBuildPaperTrialWinnerArtifactPrefersLive(t *testing.T) {
@@ -81,8 +98,8 @@ func TestBuildPaperTrialWinnerArtifactPrefersLive(t *testing.T) {
 		Market:        "a_share",
 		ActiveVersion: "active_v1",
 		Accounts: []paperTrialAccountSummary{
-			{Group: "shadow", Mode: "shadow:trial:demo:exp001", ExperimentID: "exp001", Strategy: "shadow_v1", Equity: 103000, Return: 0.03, TopN: 2, ShortWindow: 4, LongWindow: 9, FeeBps: 10, SlippageBps: 5, ParameterSummary: "shadow"},
-			{Group: "live", Mode: "trial:demo:exp002", ExperimentID: "exp002", Strategy: "active_v1", Equity: 101000, Return: 0.01, TopN: 3, ShortWindow: 5, LongWindow: 12, FeeBps: 12, SlippageBps: 6, ParameterSummary: "live"},
+			{Group: "shadow", Mode: "shadow:trial:demo:exp001", ExperimentID: "exp001", Style: "balanced", Strategy: "shadow_v1", Equity: 103000, Return: 0.03, TopN: 2, ShortWindow: 4, LongWindow: 9, FeeBps: 10, SlippageBps: 5, ParameterSummary: "shadow"},
+			{Group: "live", Mode: "trial:demo:exp002", ExperimentID: "exp002", Style: "quality_pullback", Strategy: "active_v1", Equity: 101000, Return: 0.01, TopN: 3, ShortWindow: 5, LongWindow: 12, FeeBps: 12, SlippageBps: 6, ParameterSummary: "live"},
 		},
 		variantConfigs: map[string]config{
 			"trial:demo:exp002": {Strategy: strategyConfig{ShortWindow: 5, LongWindow: 12}},
@@ -98,6 +115,9 @@ func TestBuildPaperTrialWinnerArtifactPrefersLive(t *testing.T) {
 	}
 	if winner.ExperimentID != "exp002" {
 		t.Fatalf("winner.ExperimentID = %q", winner.ExperimentID)
+	}
+	if winner.Style != "quality_pullback" {
+		t.Fatalf("winner.Style = %q", winner.Style)
 	}
 	if winner.CandidateVersion != "candidate_trial_demo_exp002" {
 		t.Fatalf("winner.CandidateVersion = %q", winner.CandidateVersion)
@@ -226,6 +246,91 @@ func TestPortfolioSelectionScorePrefersBalancedCandidateInRiskOff(t *testing.T) 
 	chasedScore := portfolioSelectionScore(chased, portfolio, "risk_off")
 	if balancedScore <= chasedScore {
 		t.Fatalf("expected balanced candidate to win in risk_off: balanced=%.4f chased=%.4f", balancedScore, chasedScore)
+	}
+}
+
+func TestQualityPullbackOpportunityScoreRewardsSupportedSelloff(t *testing.T) {
+	pullbackBars := buildTestBars(
+		[]float64{10.0, 10.2, 10.4, 10.6, 10.9, 11.1, 11.4, 11.7, 11.9, 11.8, 11.5, 11.1},
+		[]float64{1_200_000, 1_240_000, 1_260_000, 1_280_000, 1_320_000, 1_360_000, 1_420_000, 1_480_000, 1_500_000, 1_460_000, 1_520_000, 1_580_000},
+	)
+	extendedBars := buildTestBars(
+		[]float64{10.0, 10.2, 10.4, 10.6, 10.9, 11.2, 11.5, 11.9, 12.3, 12.8, 13.2, 13.6},
+		[]float64{1_200_000, 1_260_000, 1_280_000, 1_300_000, 1_340_000, 1_420_000, 1_520_000, 1_660_000, 1_800_000, 1_960_000, 2_100_000, 2_260_000},
+	)
+
+	pullbackShortMA, pullbackLongMA, _ := testMovingStats(pullbackBars, 5, 10)
+	extendedShortMA, extendedLongMA, _ := testMovingStats(extendedBars, 5, 10)
+
+	pullbackTrend, _, pullbackStructure, _, pullbackPersistence, pullbackBreakout, pullbackVolumeTrend, pullbackRiskPenalty, _ := scoreCandidate(pullbackBars, 5, 10)
+	extendedTrend, _, extendedStructure, _, extendedPersistence, extendedBreakout, extendedVolumeTrend, extendedRiskPenalty, _ := scoreCandidate(extendedBars, 5, 10)
+
+	pullbackValue, pullbackLowVol, pullbackCrowding, pullbackQuality, pullbackRisk, pullbackHeat, _ := candidateOverlayScores(
+		pullbackBars,
+		pullbackShortMA,
+		pullbackLongMA,
+		average([]float64{1_200_000, 1_240_000, 1_260_000, 1_280_000, 1_320_000, 1_360_000, 1_420_000, 1_480_000, 1_500_000, 1_460_000, 1_520_000, 1_580_000}[2:]),
+		trailingReturn(testCloses(pullbackBars), 5),
+		trailingReturn(testCloses(pullbackBars), 10),
+		pullbackTrend,
+		0.03,
+		pullbackPersistence,
+		pullbackBreakout,
+		pullbackVolumeTrend,
+		pullbackRiskPenalty,
+	)
+	extendedValue, extendedLowVol, extendedCrowding, extendedQuality, extendedRisk, extendedHeat, _ := candidateOverlayScores(
+		extendedBars,
+		extendedShortMA,
+		extendedLongMA,
+		average([]float64{1_200_000, 1_260_000, 1_280_000, 1_300_000, 1_340_000, 1_420_000, 1_520_000, 1_660_000, 1_800_000, 1_960_000, 2_100_000, 2_260_000}[2:]),
+		trailingReturn(testCloses(extendedBars), 5),
+		trailingReturn(testCloses(extendedBars), 10),
+		extendedTrend,
+		0.03,
+		extendedPersistence,
+		extendedBreakout,
+		extendedVolumeTrend,
+		extendedRiskPenalty,
+	)
+
+	pullbackScore := qualityPullbackOpportunityScore(pullbackBars, pullbackShortMA, pullbackLongMA, pullbackTrend, pullbackStructure, pullbackQuality, pullbackRisk, pullbackValue, pullbackLowVol, pullbackCrowding, pullbackHeat, 0.06, 0.03, 0.58)
+	extendedScore := qualityPullbackOpportunityScore(extendedBars, extendedShortMA, extendedLongMA, extendedTrend, extendedStructure, extendedQuality, extendedRisk, extendedValue, extendedLowVol, extendedCrowding, extendedHeat, 0.06, 0.03, 0.58)
+	if pullbackScore <= extendedScore {
+		t.Fatalf("expected supported selloff to score higher on quality pullback: pullback=%.4f extended=%.4f", pullbackScore, extendedScore)
+	}
+}
+
+func TestClassifyCandidatePromotesQualityPullbackSetup(t *testing.T) {
+	bucket, setupTag, reason, trigger, triggerPrice, avoidTags := classifyCandidate(
+		"测试股份",
+		10.15,
+		10.60,
+		10.00,
+		15_000_000,
+		"BUY",
+		0.08,
+		0.14,
+		0.02,
+		0.04,
+		"quality pullback setup is forming near long-term support",
+		"Hold above 10.60 with follow-through volume",
+	)
+
+	if bucket != "建议关注" {
+		t.Fatalf("bucket = %q", bucket)
+	}
+	if setupTag != "quality_pullback" {
+		t.Fatalf("setupTag = %q", setupTag)
+	}
+	if triggerPrice != 10.00 {
+		t.Fatalf("triggerPrice = %.2f", triggerPrice)
+	}
+	if len(avoidTags) != 0 {
+		t.Fatalf("avoidTags = %v", avoidTags)
+	}
+	if reason == "" || trigger == "" {
+		t.Fatalf("expected reason/trigger, got reason=%q trigger=%q", reason, trigger)
 	}
 }
 
