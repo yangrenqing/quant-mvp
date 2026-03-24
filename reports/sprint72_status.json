@@ -6,11 +6,11 @@
   "baselineCommit": "756661a",
   "status": "in_progress",
   "currentPhase": "phase5-next-bar-portfolio-residual-conversion-first-pass-validated",
-  "lastUpdatedAt": "2026-03-24T09:29:00+08:00",
+  "lastUpdatedAt": "2026-03-24T15:55:00+08:00",
   "nextActions": [
     "treat 10ac6c6 as the validated resume checkpoint for the portfolio next-bar work",
-    "leave the restricted/gap-blocked pending-exit behavior as an explicit documented caveat unless new evidence shows it is harmful",
-    "keep reports/docs resume points aligned with committed+pushed branch state"
+    "treat 335ca1e as newer branch-head work outside the validated next-bar slice unless separately revalidated",
+    "keep reports/docs resume points aligned while distinguishing validated checkpoint vs current branch head"
   ],
   "completed": [
     "repo located",
@@ -61,7 +61,8 @@
     "next-bar handoff header aligned to the active seam-audit branch and current resume status files",
     "residual portfolio next-bar conversion implemented locally with pending exits/carried rebalance execution and passing go test ./...",
     "residual portfolio next-bar conversion committed and pushed as 2e87a7a on feature/backtest-trust-next-bar-seam-audit",
-    "fresh portfolio backtest first-pass validation confirmed close_t -> open_t_plus_1 semantics in snapshots/holding-change samples"
+    "fresh portfolio backtest first-pass validation confirmed close_t -> open_t_plus_1 semantics in snapshots/holding-change samples",
+    "branch head later advanced to 335ca1e for a separate quality-pullback trial slice; validated next-bar checkpoint remains 10ac6c6"
   ],
   "blocked": []
 }

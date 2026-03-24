@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "Residual portfolio next-bar conversion is now pushed and first-pass validated: fresh portfolio backtest artifacts show close_t -> open_t_plus_1 semantics with holding-change samples like 2025-01-23 -> 2025-01-24 and 2025-05-15 -> 2025-05-16.",
-  "nextAction": "Keep 10ac6c6 as the validated resume checkpoint; the remaining restricted/gap-blocked pending-exit behavior is acceptable as an explicit documented caveat and does not currently warrant a separate follow-up slice.",
-  "updatedAt": "2026-03-24T09:29:00+08:00"
+  "lastSummary": "The next-bar line remains validated at code checkpoint 10ac6c6, while branch head has since advanced to 335ca1e for a separate quality-pullback trial slice; these should not be conflated as the same checkpoint.",
+  "nextAction": "Keep 10ac6c6 as the validated next-bar resume checkpoint, treat 335ca1e as newer branch-head work outside that validated slice, and only update the next-bar checkpoint if later commits are explicitly revalidated for that line.",
+  "updatedAt": "2026-03-24T15:55:00+08:00"
 }

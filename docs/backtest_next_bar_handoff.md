@@ -267,7 +267,8 @@ Validation evidence already captured:
 - holding-change samples show explicit `t -> t+1` transitions such as `2025-01-23 -> 2025-01-24` and `2025-05-15 -> 2025-05-16`
 
 Immediate next step:
-- use `10ac6c6` as the validated resume checkpoint for this line
+- use `10ac6c6` as the validated resume checkpoint for this next-bar line
+- do not confuse later branch-head commits (for example `335ca1e`, a separate quality-pullback trial slice) with this validated checkpoint unless they are explicitly revalidated for next-bar semantics
 - only reopen this area if new evidence shows the restricted/gap-blocked pending-exit caveat is materially harmful
 
 Remaining caveat captured in code-path behavior:
