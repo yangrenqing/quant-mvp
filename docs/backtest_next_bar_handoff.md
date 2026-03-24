@@ -1,9 +1,9 @@
 # Next-Bar Execution Handoff
 
-Updated: 2026-03-24 09:19 Asia/Shanghai
+Updated: 2026-03-24 19:38 Asia/Shanghai
 Repo: `/Users/yangrenqing/Downloads/quant-mvp`
 Branch: `feature/backtest-trust-next-bar-seam-audit`
-Resume baseline: follow `reports/sprint72_status.json` + `reports/cc_autopilot_status.json` for the latest pushed checkpoint on this branch
+Resume baseline: keep `10ac6c6` as the validated next-bar checkpoint; treat later branch work on this branch as non-validated unless explicitly revalidated, and use `reports/sprint72_status.json` + `reports/cc_autopilot_status.json` as the source of truth for that split
 
 ## Purpose
 
