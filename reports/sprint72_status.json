@@ -5,11 +5,11 @@
   "repo": "/Users/yangrenqing/Downloads/quant-mvp",
   "baselineCommit": "756661a",
   "status": "in_progress",
-  "currentPhase": "phase5-next-bar-portfolio-residual-conversion-pushed",
-  "lastUpdatedAt": "2026-03-24T09:19:00+08:00",
+  "currentPhase": "phase5-next-bar-portfolio-residual-conversion-first-pass-validated",
+  "lastUpdatedAt": "2026-03-24T09:23:00+08:00",
   "nextActions": [
-    "validate portfolio snapshot/trade semantics against the documented semantic checklist with a fresh portfolio backtest/manual transition review",
-    "sync any resulting artifacts/docs to the pushed checkpoint 2e87a7a",
+    "sync the semantic validation findings into docs/status artifacts on top of pushed checkpoint 90b22b9",
+    "decide whether the remaining restricted-gap pending-exit caveat needs an explicit follow-up slice",
     "keep reports/docs resume points aligned with committed+pushed branch state"
   ],
   "completed": [
@@ -61,6 +61,10 @@
     "next-bar handoff header aligned to the active seam-audit branch and current resume status files",
     "residual portfolio next-bar conversion implemented locally with pending exits/carried rebalance execution and passing go test ./...",
     "residual portfolio next-bar conversion committed and pushed as 2e87a7a on feature/backtest-trust-next-bar-seam-audit"
+  ],
+  "blocked": []
+}
+test first-pass validation confirmed close_t -> open_t_plus_1 semantics in snapshots/holding-change samples"
   ],
   "blocked": []
 }
