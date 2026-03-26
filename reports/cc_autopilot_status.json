@@ -24,7 +24,7 @@
     "material habit/workflow change",
     "real-money or external trading action"
   ],
-  "lastSummary": "The next-bar line remains validated at code checkpoint 10ac6c6, and the handoff header now surfaces that split explicitly; later branch commits remain outside the validated slice unless separately revalidated for next-bar semantics.",
-  "nextAction": "Keep 10ac6c6 as the validated next-bar resume checkpoint, treat later branch commits as outside that validated slice unless separately revalidated for next-bar semantics, and keep resume docs aligned without binding them to every docs-only head move.",
-  "updatedAt": "2026-03-25T06:53:00+08:00"
+  "lastSummary": "Autopilot remains active on feature/backtest-trust-next-bar-seam-audit; the validated next-bar checkpoint is still 10ac6c6, the current branch head remains 1811725, and the safest 11:48 CST action is still low-risk status/handoff/report continuity only.",
+  "nextAction": "Keep 10ac6c6 as the validated next-bar resume checkpoint, keep treating later branch work as outside that validated slice unless a fresh semantic rerun revalidates it, and limit this round to recoverable continuity updates plus visible handoff continuity rather than new checkpoint claims.",
+  "updatedAt": "2026-03-26T11:48:00+08:00"
 }

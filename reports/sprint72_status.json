@@ -6,11 +6,13 @@
   "baselineCommit": "756661a",
   "status": "in_progress",
   "currentPhase": "phase5-next-bar-portfolio-residual-conversion-first-pass-validated",
-  "lastUpdatedAt": "2026-03-25T06:53:00+08:00",
+  "lastUpdatedAt": "2026-03-26T11:48:00+08:00",
   "nextActions": [
     "treat 10ac6c6 as the validated resume checkpoint for the portfolio next-bar work",
     "treat later branch commits (including 335ca1e quality-pullback trial work and subsequent docs-sync commits) as outside the validated next-bar slice unless separately revalidated",
-    "keep reports/docs resume points aligned using validated-checkpoint vs later-branch-work language rather than binding to every docs-only head move"
+    "keep reports/docs resume points aligned using validated-checkpoint vs later-branch-work language rather than binding to every docs-only head move",
+    "prefer low-risk status/handoff/report maintenance until a fresh semantic revalidation run is explicitly completed",
+    "record the 2026-03-26 11:48 CST patrol as continuity-only: branch head remains 1811725, handoff visibility is refreshed for the next resume window, and no new validated checkpoint claim is warranted"
   ],
   "completed": [
     "repo located",

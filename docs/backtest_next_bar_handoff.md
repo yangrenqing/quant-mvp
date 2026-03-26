@@ -269,6 +269,8 @@ Validation evidence already captured:
 Immediate next step:
 - use `10ac6c6` as the validated resume checkpoint for this next-bar line
 - do not confuse later branch work (including `335ca1e`, a separate quality-pullback trial slice, plus any follow-up docs-sync commits) with this validated checkpoint unless those later commits are explicitly revalidated for next-bar semantics
+- 2026-03-26 10:48 CST continuity patrol rechecked `feature/backtest-trust-next-bar-seam-audit` at head `1811725`: autopilot remains active, resume visibility was refreshed in `docs/now.md` + `reports/cc_autopilot_status.json` + `reports/sprint72_status.json`, and no new semantic rerun was performed, so `10ac6c6` remains the only validated next-bar checkpoint for this line
+- 2026-03-26 11:48 CST continuity patrol again rechecked `feature/backtest-trust-next-bar-seam-audit` at head `1811725`: autopilot remains active, this round only refreshed resume visibility / handoff continuity, and no fresh semantic rerun was performed, so `10ac6c6` remains the only validated next-bar checkpoint for this line
 - only reopen this area if new evidence shows the restricted/gap-blocked pending-exit caveat is materially harmful
 
 Remaining caveat captured in code-path behavior:
